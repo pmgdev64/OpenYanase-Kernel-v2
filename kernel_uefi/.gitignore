@@ -1,0 +1,20 @@
+# Rust build output
+/target/
+
+# Local cargo configs (nếu chứa credentials hoặc cache cá nhân)
+.cargo/
+
+# ISO & Initrd build directories (chỉ nên sinh ra khi chạy build.sh)
+/esp_root/
+/initrd_root/
+/iso_root/
+
+# External binaries / Firmware (nên để script tự tải hoặc build thay vì commit)
+/grub_binaries/
+/xorriso/
+OVMF.fd
+
+# Generated OS Images (nếu build.sh nhả ra file .iso/.img/bin)
+*.iso
+*.img
+*.bin

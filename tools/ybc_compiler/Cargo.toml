@@ -1,0 +1,8 @@
+[package]
+name = "ybc-compiler"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ybcc"
+path = "src/main.rs"

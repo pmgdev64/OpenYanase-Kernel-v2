@@ -1,0 +1,111 @@
+@driver ac97 sound 5
+
+func ac97_init() {
+    print "AC97: Dang khoi tao hardware..."
+
+    let nambar = 53248     // BAR0 (0xD000)
+    let nabmbar = 54272    // BAR1 (0xD400)
+    let irq_num = 11
+
+    let AC97_MASTER_VOL = 2
+    let AC97_PCM_VOL = 24
+    let AC97_PO_CR = 27
+
+    driver_claim_irq(irq_num)
+    
+    // Reset PCM Output Controller
+    driver_io_port(nabmbar + AC97_PO_CR, 2)
+    
+    // Unmute & set max volume cho Master va PCM
+    driver_io_port(nambar + AC97_MASTER_VOL, 0)
+    driver_io_port(nambar + AC97_PCM_VOL, 0)
+
+    driver_ready()
+    print "AC97: Ready!"
+    return 0
+}
+
+func ac97_setup_internal_bdl() {
+    let pcm_addr = 1048576   // RAM 0x100000 (Chua pcm sample)
+    let bdl_addr = 2097152   // RAM 0x200000 (Chua BDL Structure)
+    let total_samples = 44100 // 1 Giay phat am thanh (44.1kHz)
+
+    let i = 0
+    let cycle_cnt = 0
+
+    // Tạo mảng PCM 2100Hz mà không dùng toán tử %
+    while (i < total_samples) {
+        let sample_val = 16384
+
+        // 10 sample đầu tiên mức CAO, 11 sample sau mức THẤP
+        if (cycle_cnt >= 10) {
+            sample_val = 49152 // Giá trị âm -16384 ở dạng uint16 bitwise
+        }
+
+        // Ghép 2 mẫu 16-bit (Left & Right) thành DWORD 32-bit
+        let stereo_sample = sample_val | (sample_val * 65536)
+        
+        driver_mem_write32(pcm_addr + (i * 4), stereo_sample)
+
+        // Tăng đếm chu kỳ (Reset về 0 khi đủ 21 bước)
+        cycle_cnt = cycle_cnt + 1
+        if (cycle_cnt == 21) {
+            cycle_cnt = 0
+        }
+
+        i = i + 1
+    }
+
+    // Nạp BDL Structure (8 Bytes)
+    driver_mem_write32(bdl_addr, pcm_addr)
+    
+    // IOC Flag (0x80000000 = 2147483648) + 44100 samples = 2147527748
+    let flags_and_length = 2147527748
+    driver_mem_write32(bdl_addr + 4, flags_and_length)
+
+    return bdl_addr
+}
+
+func ac97_play_tone() {
+    let nabmbar = 54272
+    let AC97_PO_BDBAR = 16
+    let AC97_PO_LVI = 21
+    let AC97_PO_CR = 27
+
+    // Tự sinh BDL và PCM trong RAM
+    let bdl_phys_addr = ac97_setup_internal_bdl()
+
+    // Cấu hình Register AC97 DMA Bus Master
+    driver_io_port(nabmbar + AC97_PO_CR, 0)                 // Stop DMA
+    driver_io_port(nabmbar + AC97_PO_BDBAR, bdl_phys_addr)  // Load BDL Address
+    driver_io_port(nabmbar + AC97_PO_LVI, 0)                // Last Valid Index = 0
+    driver_io_port(nabmbar + AC97_PO_CR, 1)                 // Start DMA
+
+    print "AC97: Dang phat Tone 2100Hz qua DMA!"
+    return 0
+}
+
+func ac97_stop() {
+    let nabmbar = 54272
+    let AC97_PO_CR = 27
+
+    driver_io_port(nabmbar + AC97_PO_CR, 0)
+    print "AC97: Stopped."
+    return 0
+}
+
+func DriverEntry() {
+    ac97_init()
+
+    while (1) {
+        let cmd = driver_wait_event()
+
+        if (cmd == 1) {
+            ac97_play_tone()
+        }
+
+        if (cmd == 2) {
+            ac97_stop()
+        }
+    }
+}

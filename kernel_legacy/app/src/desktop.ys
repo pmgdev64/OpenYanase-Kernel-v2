@@ -1,0 +1,58 @@
+// desktop_app.ys - Desktop Environment Manager
+func draw_window(x, y, w, h, title, color) {
+    draw_rect(x, y, w, h, 0xC0C0C0);
+    draw_rect(x + 3, y + 3, w - 6, 25, 0x000080);
+    draw_str_gfx(x + 10, y + 8, 0xFFFFFF, title);
+    draw_rect(x + w - 22, y + 5, 18, 18, 0xE81123);
+    draw_rect(x + 5, y + 32, w - 10, h - 37, color);
+}
+
+func main() {
+    set_gfx_mode();
+
+    let running = 1;
+    let win1_x = 100;
+    let win1_y = 80;
+    let win1_w = 400;
+    let win1_h = 250;
+
+    while (running == 1) {
+        clear();
+
+        let sh = screen_h();
+        let sw = screen_w();
+        draw_rect(0, sh - 35, sw, 35, 0x222222);
+
+        draw_window(win1_x, win1_y, win1_w, win1_h, "App Terminal", 0x000000);
+
+        let mx = mouse_x();
+        let my = mouse_y();
+        let clicked = mouse_clicked();
+
+        if (clicked == 1) {
+            let close_x1 = win1_x + win1_w - 22;
+            let close_x2 = win1_x + win1_w - 4;
+            let close_y1 = win1_y + 5;
+            let close_y2 = win1_y + 23;
+
+            if (mx > close_x1) {
+                if (mx < close_x2) {
+                    if (my > close_y1) {
+                        if (my < close_y2) {
+                            running = 0;
+                        }
+                    }
+                }
+            }
+        }
+
+        draw_cursor();
+
+        let key = read_key();
+        if (key == 27) {
+            running = 0;
+        }
+    }
+
+    set_tty_mode();
+}

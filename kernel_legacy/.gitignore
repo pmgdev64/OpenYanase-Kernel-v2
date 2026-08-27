@@ -1,0 +1,30 @@
+# Rust build target
+/target/
+**/kernel_legacy/target/
+
+# Local cargo configs
+.cargo/
+kernel_legacy/.cargo/
+
+# ISO, Initrd & Build Output Directories
+/esp_root/
+/initrd_root/
+/iso_root/
+kernel_legacy/initrd_root/
+kernel_legacy/iso_root/
+
+# External Tools & Binary Files
+/grub_binaries/
+/xorriso/
+kernel_legacy/grub_binaries/
+kernel_legacy/xorriso/
+OVMF.fd
+
+# Generated Compiled Binaries & Drivers (Chỉ ignore file sinh ra)
+*.iso
+*.img
+*.bin
+kernel_legacy/beep.drv
+
+# (Tùy chọn) Bỏ qua toàn bộ kernel_legacy nếu không muốn đẩy bản Legacy lên v2
+# kernel_legacy/

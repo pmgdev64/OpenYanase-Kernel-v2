@@ -1,0 +1,23 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+opt-level = 2
+debug = true
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[dependencies]
+x86_64 = "0.15"
