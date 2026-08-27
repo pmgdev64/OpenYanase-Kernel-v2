@@ -45,8 +45,11 @@ After cloning the repository, manually create the following directories inside `
    * For **`kernel_legacy`**: Include the GRUB `i386-pc` binaries.
    * For **`kernel_uefi`**: Include the GRUB `x86_64-efi` binaries along with the required EFI bootloader file.
 2. **`initrd_root/`**:
-   * Add `splash.bmp` (Image format: **32bpp**, resolution **800x600**).
-   * Add a PSF font file (`font.psf`, downloadable from any PSF font repository on GitHub).
+   * Add `splash.bmp` (Image format: **32bpp**, resolution **800x600** with pre-rendered warning & credits overlay text).
+   * Add a PSF font file renamed to **`font.psf`**. You can download a compatible 8x16 PSF font from the [ercanersoy/PSF-Fonts](https://github.com/ercanersoy/PSF-Fonts) repository (e.g., `default8x16.psf`) and rename it to `font.psf`:
+     ```bash
+     curl -L -o initrd_root/font.psf [https://raw.githubusercontent.com/ercanersoy/PSF-Fonts/master/default8x16.psf](https://raw.githubusercontent.com/ercanersoy/PSF-Fonts/master/default8x16.psf)
+     ```
 
 ---
 
