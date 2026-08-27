@@ -9,7 +9,7 @@
 * **Dual Boot Subsystems**:
   * **Kernel Legacy (`i686-unknown-none`)**: Legacy sub-system architecture undergoing refactoring; builds into `kernel.iso`. Early driver implementations (e.g., AC97, PC Speaker) are deprecated or currently being restructured into a unified driver model.
   * **Kernel UEFI (`x86_64-unknown-none`)**: Uses the bare-metal `x86_64-unknown-none` target (`x86_64-unknown-uefi` has been completely deprecated and discontinued). Builds into `openyanase.iso`. Handles ACPI memory parsing, GOP framebuffer graphics, windowing engine, system calls, and YBC VM execution.
-* **YBC Compiler (`tools/ybc_compiler`)**: A dedicated compiler toolchain featuring Lexer, Parser, AST, Resolver, and Codegen modules that compile custom language source code into bytecode.
+* **YBC Compiler (`tools/ybc_compiler`)**: A dedicated compiler toolchain featuring Lexer, Parser, AST, Resolver, and Codegen modules that compile custom language source code (`.yl`) into VM bytecode (`.ybc`).
 * **Graphics & Window System**: Features custom surface drawing, font rendering engines, BMP image parsing, and desktop UI composition.
 
 ---
@@ -64,10 +64,78 @@ cd kernel_legacy
 cargo run
 ```
 
-### Run YBC Compiler
+---
+
+## 📝 Yanase-Lang (`.yl`) Scripting & Compiler
+
+OpenYanase Kernel v2 features a custom scripting language (**Yanase-Lang**) that compiles into YBC bytecode to run inside the kernel VM.
+
+### 1. Syntax Overview (`example.yl`)
+
+```swift
+// Module imports
+import utils.math;
+import graphics.window as win;
+
+// Class declaration (supports single inheritance)
+class Shape {
+    x;
+    y;
+
+    fn move(dx, dy) {
+        x = x + dx;
+        y = y + dy;
+    }
+}
+
+class Circle extends Shape {
+    radius;
+
+    fn area() {
+        return radius * radius * 3;
+    }
+}
+
+// Main entry point
+fn main() {
+    let width = 800;
+    let height = 600;
+
+    let counter = 0;
+    while (counter < 10) {
+        if (counter == 5) {
+            print("Halfway completed!");
+        } else {
+            print("Processing...");
+        }
+        counter = counter + 1;
+    }
+
+    // Built-in kernel syscalls
+    draw_rect(0, 0, width, height);
+    sleep(1000);
+
+    return 0;
+}
+```
+
+### 2. Built-in Syscalls
+* `print(msg)`
+* `draw_rect(x, y, w, h)`
+* `get_tick()`
+* `sleep(ms)`
+* `exit()`
+
+### 3. Compiling `.yl` to Bytecode (`.ybc`)
+
 ```bash
 cd tools/ybc_compiler
-cargo run -- <entry.yl> <output.ybc> [--include=dir1,dir2]
+
+# Basic compilation
+cargo run -- <entry.yl> <output.ybc>
+
+# Compile with extra module search directories
+cargo run -- <entry.yl> <output.ybc> --include=dir1,dir2
 ```
 
 ---
