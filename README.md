@@ -25,6 +25,7 @@
 ## 🛠 Building & Running
 
 ### Prerequisites
+* **Host Environment**: Windows with **MSYS2** (MINGW64 / UCRT64 shell)
 * Rust Nightly toolchains (`x86_64-unknown-none`, `i686-unknown-none`)
 * `cargo` build system
 * `QEMU` emulator
