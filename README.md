@@ -22,13 +22,35 @@
 
 ---
 
-## 🛠 Building & Running
+## 🛠 Building & Setup Instructions
 
 ### Prerequisites
 * **Host Environment**: Windows with **MSYS2** (MINGW64 / UCRT64 shell)
-* Rust Nightly toolchains (`x86_64-unknown-none`, `i686-unknown-none`)
-* `cargo` build system
-* `QEMU` emulator
+* **Rust Toolchain**: Rust MSVC host toolchain (`x86_64-pc-windows-msvc`) with targets:
+  * `x86_64-unknown-none`
+  * `i686-unknown-none`
+* **Required MSYS2 Packages**: Install `xorriso` via pacman:
+  ```bash
+  pacman -S mingw-w64-x86_64-xorriso
+  ```
+* **Tools**: `cargo` build system and `QEMU` emulator.
+
+---
+
+### 📂 Directory Setup
+
+After cloning the repository, manually create the following directories inside `kernel_legacy/` and/or `kernel_uefi/` (*Note: `iso_root` is generated automatically by the build script during packaging*):
+
+1. **`grub_binaries/`**:
+   * For **`kernel_legacy`**: Include the GRUB `i386-pc` binaries.
+   * For **`kernel_uefi`**: Include the GRUB `x86_64-efi` binaries along with the required EFI bootloader file.
+2. **`initrd_root/`**:
+   * Add `splash.bmp` (Image format: **32bpp**, resolution **800x600**).
+   * Add a PSF font file (`font.psf`, downloadable from any PSF font repository on GitHub).
+
+---
+
+## 🚀 Execution Commands
 
 ### Launch UEFI Kernel (`openyanase.iso`)
 ```bash
