@@ -44,7 +44,7 @@ cargo run
 ### Run YBC Compiler
 ```bash
 cd tools/ybc_compiler
-cargo run -- <source_file>
+cargo run -- <entry.yl> <output.ybc> [--include=dir1,dir2]
 ```
 
 ---
