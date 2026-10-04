@@ -4,9 +4,11 @@ pub enum Token {
     Int(i64),
     Str(String),
     KwClass, KwExtends, KwFn, KwLet, KwIf, KwElse, KwWhile,
-    KwReturn, KwImport, KwAs, KwTrue, KwFalse,
-    Plus, Minus, Star, Slash, Lt, Gt, Eq, EqEq, Not,
-    LParen, RParen, LBrace, RBrace,
+    KwReturn, KwImport, KwAs, KwTrue, KwFalse, KwNew, KwPackage,
+    KwBreak, KwContinue,
+    Plus, Minus, Star, Slash, Lt, Gt, Eq, EqEq, Not, Neq,
+    Or, And,
+    LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Dot, Semi,
     Eof,
 }
@@ -66,6 +68,10 @@ impl<'a> Lexer<'a> {
                     "as" => Token::KwAs,
                     "true" => Token::KwTrue,
                     "false" => Token::KwFalse,
+                    "new" => Token::KwNew,
+                    "package" => Token::KwPackage,
+                    "break" => Token::KwBreak,
+                    "continue" => Token::KwContinue,
                     _ => Token::Ident(word),
                 });
                 continue;
@@ -73,9 +79,25 @@ impl<'a> Lexer<'a> {
 
             if c.is_ascii_digit() {
                 let start = self.pos;
-                while self.peek().is_ascii_digit() { self.advance(); }
+                let mut is_hex = false;
+                
+                if c == b'0' && self.pos + 1 < self.src.len() && (self.src[self.pos + 1] == b'x' || self.src[self.pos + 1] == b'X') {
+                    is_hex = true;
+                    self.advance();
+                    self.advance();
+                    while self.peek().is_ascii_hexdigit() { self.advance(); }
+                } else {
+                    while self.peek().is_ascii_digit() { self.advance(); }
+                }
+
                 let num_str = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
-                toks.push(Token::Int(num_str.parse().unwrap()));
+                let val = if is_hex {
+                    i64::from_str_radix(&num_str[2..], 16).unwrap_or(0)
+                } else {
+                    num_str.parse().unwrap_or(0)
+                };
+                
+                toks.push(Token::Int(val));
                 continue;
             }
 
@@ -87,8 +109,22 @@ impl<'a> Lexer<'a> {
                     if ch == b'\\' && self.peek() == b'n' { self.advance(); s.push('\n'); }
                     else { s.push(ch as char); }
                 }
-                self.advance(); // closing quote
+                self.advance();
                 toks.push(Token::Str(s));
+                continue;
+            }
+
+            if c == b'|' && self.peek() == b'|' {
+                self.advance();
+                self.advance();
+                toks.push(Token::Or);
+                continue;
+            }
+
+            if c == b'&' && self.peek() == b'&' {
+                self.advance();
+                self.advance();
+                toks.push(Token::And);
                 continue;
             }
 
@@ -101,13 +137,27 @@ impl<'a> Lexer<'a> {
                 b'<' => Token::Lt,
                 b'>' => Token::Gt,
                 b'=' => {
-                    if self.peek() == b'=' { self.advance(); Token::EqEq } else { Token::Eq }
+                    if self.peek() == b'=' {
+                        self.advance();
+                        Token::EqEq
+                    } else {
+                        Token::Eq
+                    }
                 }
-                b'!' => Token::Not,
+                b'!' => {
+                    if self.peek() == b'=' {
+                        self.advance();
+                        Token::Neq
+                    } else {
+                        Token::Not
+                    }
+                }
                 b'(' => Token::LParen,
                 b')' => Token::RParen,
                 b'{' => Token::LBrace,
                 b'}' => Token::RBrace,
+                b'[' => Token::LBracket,
+                b']' => Token::RBracket,
                 b',' => Token::Comma,
                 b'.' => Token::Dot,
                 b';' => Token::Semi,

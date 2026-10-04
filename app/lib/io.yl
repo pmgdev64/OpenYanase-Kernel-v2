@@ -1,0 +1,17 @@
+package io;
+
+fn write_line(text) {
+    syscall(1, text);
+}
+
+fn write_port(port, data) {
+    syscall(100, port, data);
+}
+
+fn read_port(port) {
+    return syscall(101, port);
+}
+
+fn read_char() {
+    return syscall(102);
+}

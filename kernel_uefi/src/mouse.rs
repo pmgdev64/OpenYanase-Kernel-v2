@@ -44,7 +44,7 @@ extern "C" {
 }
 
 unsafe fn mouse_wait(type_val: u8) {
-    let mut timeout = 100_000;
+    let mut timeout = 10_000;
     while timeout > 0 {
         let status = inb(0x64);
         if type_val == 0 && (status & 1) != 0 { return; }
@@ -61,44 +61,49 @@ unsafe fn mouse_write(data: u8) {
 }
 
 unsafe fn mouse_read() -> u8 {
-    mouse_wait(0);
-    inb(0x60)
+    let mut timeout = 10_000;
+    while timeout > 0 {
+        let status = inb(0x64);
+        if (status & 1) != 0 {
+            return inb(0x60);
+        }
+        timeout -= 1;
+    }
+    0
 }
 
 pub fn init_mouse() {
     unsafe {
         mouse_wait(1);
-        outb(0x64, 0xA8); // Enable auxiliary device (mouse clock)
+        outb(0x64, 0xA8);
 
         mouse_wait(1);
-        outb(0x64, 0x20); // Read Command Byte
+        outb(0x64, 0x20);
         mouse_wait(0);
         let old_status = inb(0x60);
 
-        // Giữ nguyên bit keyboard (bit0 IRQ1, bit4 clock1),
-        // thêm bit1 (IRQ12 enable) và clear bit5 (enable clock2)
         let status = (old_status | 0x02) & !0x20;
 
         mouse_wait(1);
-        outb(0x64, 0x60); // Write Command Byte
+        outb(0x64, 0x60);
         mouse_wait(1);
         outb(0x60, status);
 
-        mouse_write(0xFF); // Reset
-        let _ack = mouse_read();
-        let _bat = mouse_read();
-        let _id  = mouse_read();
+        // Bỏ RESET để tránh delay
+        // mouse_write(0xFF);
+        // let _ack = mouse_read();
+        // let _bat = mouse_read();
+        // let _id  = mouse_read();
 
-        mouse_write(0xF6); // Set defaults
+        mouse_write(0xF6);
         let _ack2 = mouse_read();
 
-        mouse_write(0xF4); // Enable data reporting
+        mouse_write(0xF4);
         let _ack3 = mouse_read();
     }
 
     crate::idt::set_gate(44, mouse_interrupt_stub as usize as u64);
 
-    // Unmask IRQ12 ở slave PIC (bit4 = IRQ 8+4=12)
     unsafe {
         let mask = inb(0xA1);
         outb(0xA1, mask & !(1 << 4));
@@ -113,7 +118,6 @@ pub extern "C" fn handle_mouse_interrupt() {
             let data = inb(0x60);
             match MOUSE_CYCLE {
                 0 => {
-                    // Bit3 phải =1, bit6/7 (overflow) phải =0 để hợp lệ; nếu không, drop và tự resync
                     if (data & 0x08) != 0 && (data & 0xC0) == 0 {
                         MOUSE_BYTE[0] = data;
                         MOUSE_CYCLE = 1;

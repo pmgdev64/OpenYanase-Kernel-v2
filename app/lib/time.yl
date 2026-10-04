@@ -1,0 +1,9 @@
+package time;
+
+fn now_ticks() {
+    return syscall(3);
+}
+
+fn now_secs() {
+    return syscall(7);
+}

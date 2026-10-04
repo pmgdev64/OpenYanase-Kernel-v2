@@ -1,0 +1,9 @@
+package system;
+
+fn shutdown() {
+    syscall(113);
+}
+
+fn reboot() {
+    syscall(114);
+}

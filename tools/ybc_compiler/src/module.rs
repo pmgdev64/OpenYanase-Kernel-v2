@@ -1,3 +1,4 @@
+// src/module.rs
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use crate::ast::Module;
@@ -6,7 +7,7 @@ use crate::parser::Parser;
 
 pub struct ModuleLoader {
     pub search_roots: Vec<PathBuf>,
-    pub loaded: HashMap<String, Module>, // key = "a.b.c" path canonical
+    pub loaded: HashMap<String, Module>,
 }
 
 impl ModuleLoader {
@@ -14,7 +15,6 @@ impl ModuleLoader {
         Self { search_roots, loaded: HashMap::new() }
     }
 
-    /// path = ["utils", "math"] -> tìm utils/math.yl trong mọi search_root
     pub fn resolve_path(&self, path: &[String]) -> Option<PathBuf> {
         let rel: PathBuf = path.iter().collect();
         for root in &self.search_roots {
@@ -26,7 +26,6 @@ impl ModuleLoader {
         None
     }
 
-    /// Load module (và đệ quy load mọi import bên trong nó), tránh load lặp
     pub fn load(&mut self, path: &[String]) -> Result<String, String> {
         let key = path.join(".");
         if self.loaded.contains_key(&key) {
@@ -42,7 +41,6 @@ impl ModuleLoader {
         let toks = Lexer::new(&src).tokenize();
         let module = Parser::new(toks).parse_module();
 
-        // Load trước tất cả import bên trong module này (đệ quy)
         for item in &module.items {
             if let crate::ast::Item::Import(imp) = item {
                 self.load(&imp.path)?;

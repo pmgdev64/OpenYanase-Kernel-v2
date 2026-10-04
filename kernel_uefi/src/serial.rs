@@ -39,12 +39,12 @@ pub fn serial_write_str(s: &str) {
 }
 
 pub fn serial_log(level: &str, msg: &str) {
-    // TICKS is AtomicU64, no unsafe needed for load
     let ticks = crate::timer::TICKS.load(Ordering::Relaxed);
     let mut writer = SerialWriter;
     let _ = write!(&mut writer, "[{}] [{}] {}\r\n", ticks, level, msg);
 }
 
+// THÊM: SerialWriter cho fmt::Write
 pub struct SerialWriter;
 
 impl fmt::Write for SerialWriter {
@@ -54,6 +54,7 @@ impl fmt::Write for SerialWriter {
     }
 }
 
+// Giữ lại Serial struct cũ cho tương thích
 pub struct Serial;
 
 impl fmt::Write for Serial {

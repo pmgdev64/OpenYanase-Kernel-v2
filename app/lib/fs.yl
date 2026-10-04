@@ -1,0 +1,21 @@
+package fs;
+
+fn list_dir(path) {
+    return syscall(108, path);
+}
+
+fn read_file(path) {
+    return syscall(109, path);
+}
+
+fn cd(path) {
+    syscall(110, path);
+}
+
+fn get_cwd() {
+    return syscall(111);
+}
+
+fn is_dir(path) {
+    return syscall(112, path);
+}

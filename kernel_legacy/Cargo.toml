@@ -19,13 +19,11 @@ lto = true
 
 [dependencies]
 # Existing dependencies
-luna-core = { version = "3", default-features = false, features = ["no-std"] }
 
 # Optional: If you need alloc (Vec, String, etc.) for Lua
 # alloc = { version = "0.1", default-features = false, features = ["no-std"] }
 
 # For error handling
-thiserror = { version = "1.0", default-features = false }
 
 # For memory management (if you need HashMap/Vector from alloc)
 # hashbrown = { version = "0.14", default-features = false }

@@ -24,11 +24,7 @@ struct Utf8Decoder {
 
 impl Utf8Decoder {
     const fn new() -> Self {
-        Utf8Decoder {
-            state: 0,
-            codepoint: 0,
-            bytes_left: 0,
-        }
+        Utf8Decoder { state: 0, codepoint: 0, bytes_left: 0 }
     }
 
     fn decode(&mut self, byte: u8) -> Option<char> {
@@ -94,7 +90,7 @@ impl ScrollbackBuffer {
         if len < MAX_COLS {
             self.lines[idx][len] = 0;
         }
-        
+
         self.head += 1;
         if self.count < SCROLLBACK_LINES {
             self.count += 1;
@@ -112,13 +108,8 @@ impl ScrollbackBuffer {
         &self.lines[idx][..len]
     }
 
-    pub fn len(&self) -> usize {
-        self.count
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.count == 0
-    }
+    pub fn len(&self) -> usize { self.count }
+    pub fn is_empty(&self) -> bool { self.count == 0 }
 }
 
 pub struct Console {
@@ -140,6 +131,8 @@ pub struct Console {
     lock: AtomicBool,
     pub fg_color: u32,
     pub bg_color: u32,
+    pub cursor_force_visible: bool,
+    pub cursor_visible: bool,
 }
 
 pub static mut CONSOLE: Console = Console {
@@ -161,10 +154,12 @@ pub static mut CONSOLE: Console = Console {
     lock: AtomicBool::new(false),
     fg_color: 0xFFFFFFFF,
     bg_color: 0xFF000000,
+    cursor_force_visible: false,
+    cursor_visible: false,
 };
 
 impl Console {
-    pub fn init(&mut self, fb_addr: *mut u32, width: u32, height: u32, pitch: u32, 
+    pub fn init(&mut self, fb_addr: *mut u32, width: u32, height: u32, pitch: u32,
                 tex: *const u32, tex_w: u32, tex_h: u32) {
         self.fb_addr = fb_addr;
         self.fb_width = width;
@@ -176,6 +171,8 @@ impl Console {
         self.col = 0;
         self.row = 0;
         self.cursor_active = false;
+        self.cursor_force_visible = false;
+        self.cursor_visible = false;
         self.scroll_offset = 0;
         self.total_rows = 0;
         self.fg_color = 0xFFFFFFFF;
@@ -184,8 +181,28 @@ impl Console {
         self.buf = [0; MAX_ROWS * MAX_COLS];
         self.decoder = Utf8Decoder::new();
         self.lock = AtomicBool::new(false);
-        
+
         self.clear();
+    }
+
+    pub fn glyph_dims(&self) -> (u32, u32) {
+        if self.tex.is_null() || self.tex_w == 0 || self.tex_h == 0 {
+            return (8, 16);
+        }
+        let gw = self.tex_w / 16;
+        let gh = self.tex_h / 16;
+        if gw == 0 || gh == 0 { return (8, 16); }
+        (gw, gh)
+    }
+
+    pub fn visible_cols(&self, glyph_w: u32) -> u32 {
+        if self.fb_addr.is_null() || glyph_w == 0 { return 80; }
+        (self.fb_width / glyph_w).min(MAX_COLS as u32).max(1)
+    }
+
+    pub fn visible_rows(&self, glyph_h: u32) -> u32 {
+        if self.fb_addr.is_null() || glyph_h == 0 { return 25; }
+        (self.fb_height / glyph_h).min(MAX_ROWS as u32).max(1)
     }
 
     #[inline(always)]
@@ -199,37 +216,15 @@ impl Console {
         }
     }
 
-    fn glyph_dims(&self) -> (u32, u32) {
-        if self.tex.is_null() || self.tex_w == 0 || self.tex_h == 0 {
-            return (8, 16);
-        }
-        let gw = self.tex_w / 16;
-        let gh = self.tex_h / 16;
-        if gw == 0 || gh == 0 {
-            return (8, 16);
-        }
-        (gw, gh)
-    }
-
-    fn visible_cols(&self, glyph_w: u32) -> u32 {
-        if self.fb_addr.is_null() || glyph_w == 0 { return 80; }
-        (self.fb_width / glyph_w).min(MAX_COLS as u32).max(1)
-    }
-
-    fn visible_rows(&self, glyph_h: u32) -> u32 {
-        if self.fb_addr.is_null() || glyph_h == 0 { return 25; }
-        (self.fb_height / glyph_h).min(MAX_ROWS as u32).max(1)
-    }
-
     pub fn clear(&mut self) {
         if self.fb_addr.is_null() { return; }
-        
-        while self.lock.compare_exchange(false, true, 
-            core::sync::atomic::Ordering::Acquire, 
+
+        while self.lock.compare_exchange(false, true,
+            core::sync::atomic::Ordering::Acquire,
             core::sync::atomic::Ordering::Relaxed).is_err() {
             core::hint::spin_loop();
         }
-        
+
         self.hide_cursor();
         let size = (self.fb_height * (self.fb_pitch / 4)) as usize;
         unsafe {
@@ -243,7 +238,10 @@ impl Console {
         self.row = 0;
         self.scroll_offset = 0;
         self.decoder = Utf8Decoder::new();
-        
+        self.cursor_active = false;
+        self.cursor_visible = false;
+        self.cursor_force_visible = false;
+
         self.lock.store(false, core::sync::atomic::Ordering::Release);
     }
 
@@ -255,11 +253,16 @@ impl Console {
         let rows = self.visible_rows(glyph_h);
         if rows == 0 { return; }
 
-        while self.lock.compare_exchange(false, true, 
-            core::sync::atomic::Ordering::Acquire, 
+        while self.lock.compare_exchange(false, true,
+            core::sync::atomic::Ordering::Acquire,
             core::sync::atomic::Ordering::Relaxed).is_err() {
             core::hint::spin_loop();
         }
+
+        let was_force = self.cursor_force_visible;
+        let was_active = self.cursor_active;
+        self.cursor_force_visible = false;
+        self.hide_cursor();
 
         let mut line_buf = [0u8; MAX_COLS];
         for c in 0..MAX_COLS {
@@ -278,7 +281,7 @@ impl Console {
         self.buf[last_row..last_row + MAX_COLS].fill(0);
 
         let stride = (self.fb_pitch / 4) as usize;
-        
+
         for y in 0..(self.fb_height - glyph_h) {
             let src_y = y + glyph_h;
             let dst_y = y;
@@ -298,19 +301,18 @@ impl Console {
             }
         }
 
-        let visible_rows = rows.min(MAX_ROWS as u32);
-        for r in 0..visible_rows {
-            let row_idx = r as usize * MAX_COLS;
-            for c in 0..MAX_COLS {
-                let ch = self.buf[row_idx + c];
-                if ch != 0 {
-                    self.draw_glyph_at(c as u32, r, ch);
-                }
-            }
-        }
-        
+        // Framebuffer đã được dịch lên ở trên và dòng cuối đã xoá,
+        // nên không cần vẽ lại toàn bộ glyph (tốn, nhất là khi blend alpha).
+
         self.row = rows - 1;
-        
+
+        self.cursor_force_visible = was_force;
+        if was_active {
+            self.cursor_active = true;
+            self.cursor_visible = true;
+            self.invert_cursor_pixels();
+        }
+
         self.lock.store(false, core::sync::atomic::Ordering::Release);
     }
 
@@ -327,50 +329,52 @@ impl Console {
         }
     }
 
+    // Atlas lưu coverage (0..255) ở kênh alpha. Nền console luôn đặc (bg_color)
+    // nên trộn fg lên bg là chính xác, không cần đọc lại framebuffer.
+    // PSF cũ (alpha 0/255) vẫn chạy đúng qua cùng đường này.
     fn draw_glyph_at(&self, col: u32, row: u32, byte: u8) {
-        if self.fb_addr.is_null() || self.tex.is_null() { 
-            return; 
-        }
-        
-        let (glyph_w, glyph_h) = self.glyph_dims();
-        if glyph_w == 0 || glyph_h == 0 { 
-            return; 
-        }
+        if self.fb_addr.is_null() || self.tex.is_null() { return; }
 
-        let px = col * glyph_w;
-        let py = row * glyph_h;
+        let (glyph_w, glyph_h) = self.glyph_dims();
+        if glyph_w == 0 || glyph_h == 0 { return; }
+
+        let px0 = col * glyph_w;
+        let py0 = row * glyph_h;
+        if px0 >= self.fb_width || py0 >= self.fb_height { return; }
 
         let map_x = ((byte as u32) % 16) * glyph_w;
         let map_y = ((byte as u32) / 16) * glyph_h;
 
-        for cy in 0..glyph_h {
-            for cx in 0..glyph_w {
-                if px + cx < self.fb_width && py + cy < self.fb_height {
-                    let tex_idx = ((map_y + cy) * self.tex_w + (map_x + cx)) as usize;
-                    let max_idx = (self.tex_w * self.tex_h) as usize;
-                    
-                    if tex_idx < max_idx {
-                        let color = unsafe { *self.tex.add(tex_idx) };
-                        if color != 0x00000000 {
-                            self.put_pixel(px + cx, py + cy, self.fg_color);
-                        } else {
-                            self.put_pixel(px + cx, py + cy, self.bg_color);
-                        }
-                    }
-                }
+        let tex_w = self.tex_w as usize;
+        let tex_len = tex_w * (self.tex_h as usize);
+        let stride = (self.fb_pitch / 4) as usize;
+        let fg = self.fg_color;
+        let bg = self.bg_color;
+
+        let w = glyph_w.min(self.fb_width - px0) as usize;
+        let h = glyph_h.min(self.fb_height - py0) as usize;
+
+        for cy in 0..h {
+            let tex_row = (map_y as usize + cy) * tex_w + map_x as usize;
+            let dst_row = (py0 as usize + cy) * stride + px0 as usize;
+            for cx in 0..w {
+                let ti = tex_row + cx;
+                let a = if ti < tex_len { (unsafe { *self.tex.add(ti) }) >> 24 } else { 0 };
+                let color = crate::graphics::font::blend_rgb(fg, bg, a);
+                unsafe { self.fb_addr.add(dst_row + cx).write_volatile(color); }
             }
         }
     }
 
     pub fn redraw_all(&mut self) {
         if self.fb_addr.is_null() { return; }
-        
-        while self.lock.compare_exchange(false, true, 
-            core::sync::atomic::Ordering::Acquire, 
+
+        while self.lock.compare_exchange(false, true,
+            core::sync::atomic::Ordering::Acquire,
             core::sync::atomic::Ordering::Relaxed).is_err() {
             core::hint::spin_loop();
         }
-        
+
         self.hide_cursor();
         let size = (self.fb_height * (self.fb_pitch / 4)) as usize;
         unsafe {
@@ -390,7 +394,11 @@ impl Console {
                 }
             }
         }
-        
+
+        if self.cursor_active {
+            self.invert_cursor_pixels();
+        }
+
         self.lock.store(false, core::sync::atomic::Ordering::Release);
     }
 
@@ -409,18 +417,24 @@ impl Console {
         let (glyph_w, glyph_h) = self.glyph_dims();
         if glyph_w == 0 || glyph_h == 0 { return; }
 
+        if !self.cursor_visible && !self.cursor_force_visible {
+            return;
+        }
+
         let stride = (self.fb_pitch / 4) as usize;
         let base_x = self.col * glyph_w;
         let base_y = self.row * glyph_h;
 
-        let cursor_y = base_y + glyph_h - 2;
-        for cx in 0..glyph_w {
-            let px = base_x + cx;
-            if px < self.fb_width && cursor_y < self.fb_height {
-                let idx = (cursor_y as usize) * stride + (px as usize);
-                unsafe {
-                    let current_color = *self.fb_addr.add(idx);
-                    *self.fb_addr.add(idx) = current_color ^ 0x00FFFFFF;
+        for row in 0..glyph_h {
+            for col in 0..glyph_w {
+                let px = base_x + col;
+                let py = base_y + row;
+                if px < self.fb_width && py < self.fb_height {
+                    let idx = (py as usize) * stride + (px as usize);
+                    unsafe {
+                        let current_color = *self.fb_addr.add(idx);
+                        *self.fb_addr.add(idx) = current_color ^ 0x00FFFFFF;
+                    }
                 }
             }
         }
@@ -430,12 +444,14 @@ impl Console {
         if self.cursor_active {
             self.invert_cursor_pixels();
             self.cursor_active = false;
+            self.cursor_visible = false;
         }
     }
 
     pub fn show_cursor(&mut self) {
         if is_gfx_mode() { return; }
         if !self.cursor_active {
+            self.cursor_visible = true;
             self.invert_cursor_pixels();
             self.cursor_active = true;
         }
@@ -448,6 +464,11 @@ impl Console {
             }
             return;
         }
+
+        if self.cursor_force_visible {
+            return;
+        }
+
         if self.cursor_active {
             self.hide_cursor();
         } else {
@@ -455,9 +476,24 @@ impl Console {
         }
     }
 
+    pub fn force_show_cursor(&mut self) {
+        self.cursor_force_visible = true;
+        if !self.cursor_active {
+            self.cursor_visible = true;
+            self.invert_cursor_pixels();
+            self.cursor_active = true;
+        }
+    }
+
+    pub fn release_cursor_force(&mut self) {
+        self.cursor_force_visible = false;
+    }
+
     pub fn backspace(&mut self) {
         if is_gfx_mode() || self.fb_addr.is_null() || self.tex_w == 0 { return; }
 
+        let was_force = self.cursor_force_visible;
+        self.cursor_force_visible = false;
         self.hide_cursor();
 
         if self.col > 0 {
@@ -467,6 +503,8 @@ impl Console {
             let (glyph_w, _) = self.glyph_dims();
             self.col = self.visible_cols(glyph_w).saturating_sub(1);
         } else {
+            self.cursor_force_visible = was_force;
+            self.show_cursor();
             return;
         }
 
@@ -474,6 +512,9 @@ impl Console {
             self.buf[self.row as usize * MAX_COLS + self.col as usize] = 0;
         }
         self.clear_cell(self.col, self.row);
+
+        self.cursor_force_visible = was_force;
+        self.show_cursor();
     }
 
     pub fn write_char(&mut self, ch: char) {
@@ -481,10 +522,21 @@ impl Console {
             return;
         }
 
+        if self.scroll_offset > 0 {
+            self.scroll_offset = 0;
+            self.redraw_all();
+        }
+
+        let was_force = self.cursor_force_visible;
+        self.cursor_force_visible = false;
         self.hide_cursor();
 
         let (glyph_w, glyph_h) = self.glyph_dims();
-        if glyph_w == 0 || glyph_h == 0 { return; }
+        if glyph_w == 0 || glyph_h == 0 {
+            self.cursor_force_visible = was_force;
+            self.show_cursor();
+            return;
+        }
 
         let cols = self.visible_cols(glyph_w);
         let rows = self.visible_rows(glyph_h);
@@ -496,11 +548,15 @@ impl Console {
                 self.scroll_up();
                 self.row = rows - 1;
             }
+            self.cursor_force_visible = was_force;
+            self.show_cursor();
             return;
         }
 
         if ch == '\x08' {
             self.backspace();
+            self.cursor_force_visible = was_force;
+            self.show_cursor();
             return;
         }
 
@@ -510,6 +566,8 @@ impl Console {
             for _ in 0..spaces {
                 self.write_char(' ');
             }
+            self.cursor_force_visible = was_force;
+            self.show_cursor();
             return;
         }
 
@@ -528,6 +586,9 @@ impl Console {
                 self.row = rows - 1;
             }
         }
+
+        self.cursor_force_visible = was_force;
+        self.show_cursor();
     }
 
     pub fn write_byte(&mut self, byte: u8) {
@@ -547,8 +608,9 @@ impl Console {
     }
 
     pub fn scroll_up_offset(&mut self, lines: u32) {
-        if self.scroll_offset + lines > self.scrollback.len() as u32 {
-            self.scroll_offset = self.scrollback.len() as u32;
+        let max_scroll = self.scrollback.len() as u32;
+        if self.scroll_offset + lines > max_scroll {
+            self.scroll_offset = max_scroll;
         } else {
             self.scroll_offset += lines;
         }
@@ -571,13 +633,13 @@ impl Console {
 
     fn redraw_with_scroll(&mut self) {
         if self.fb_addr.is_null() { return; }
-        
-        while self.lock.compare_exchange(false, true, 
-            core::sync::atomic::Ordering::Acquire, 
+
+        while self.lock.compare_exchange(false, true,
+            core::sync::atomic::Ordering::Acquire,
             core::sync::atomic::Ordering::Relaxed).is_err() {
             core::hint::spin_loop();
         }
-        
+
         self.hide_cursor();
         let size = (self.fb_height * (self.fb_pitch / 4)) as usize;
         unsafe {
@@ -590,7 +652,7 @@ impl Console {
         let (_, glyph_h) = self.glyph_dims();
         let rows = self.visible_rows(glyph_h);
         let scroll_start = self.scrollback.len() as u32 - self.scroll_offset;
-        
+
         for r in 0..rows.min(MAX_ROWS as u32) {
             let line_idx = (scroll_start + r) as usize;
             let line = if line_idx < self.scrollback.len() {
@@ -598,7 +660,7 @@ impl Console {
             } else {
                 &[]
             };
-            
+
             for c in 0..MAX_COLS {
                 let ch = if c < line.len() { line[c] } else { 0 };
                 if ch != 0 {
@@ -606,7 +668,11 @@ impl Console {
                 }
             }
         }
-        
+
+        if self.cursor_active {
+            self.invert_cursor_pixels();
+        }
+
         self.lock.store(false, core::sync::atomic::Ordering::Release);
     }
 }
@@ -628,6 +694,10 @@ pub fn get_display_mode() -> DisplayMode {
 
 pub fn set_display_mode(mode: DisplayMode) {
     DISPLAY_MODE.store(mode as u8, Ordering::Relaxed);
+    // ✅ FIX: đồng bộ IS_GFX_MODE — nếu không, mọi CONSOLE.write_* trong
+    // graphics mode sẽ vẫn ghi thẳng vào VRAM và bị update_frame xoá đi,
+    // gây nháy chữ / đốm trắng.
+    IS_GFX_MODE.store(mode == DisplayMode::Graphics, Ordering::Relaxed);
 }
 
 #[repr(C)]
@@ -678,7 +748,7 @@ pub static mut CONSOLE_STATE: ConsoleState = ConsoleState::new();
 pub unsafe fn save_console_state() {
     let console = &CONSOLE;
     let state = &mut CONSOLE_STATE;
-    
+
     state.fb_addr = console.fb_addr;
     state.width = console.fb_width;
     state.height = console.fb_height;
@@ -695,7 +765,7 @@ pub unsafe fn save_console_state() {
     state.bg_color = console.bg_color;
     state.buf.copy_from_slice(&console.buf);
     state.saved = true;
-    
+
     set_display_mode(DisplayMode::Graphics);
 }
 
@@ -703,10 +773,10 @@ pub unsafe fn restore_console_state() {
     if !CONSOLE_STATE.saved {
         return;
     }
-    
+
     let state = &CONSOLE_STATE;
     let console = &mut CONSOLE;
-    
+
     console.fb_addr = state.fb_addr;
     console.fb_width = state.width;
     console.fb_height = state.height;
@@ -722,12 +792,12 @@ pub unsafe fn restore_console_state() {
     console.fg_color = state.fg_color;
     console.bg_color = state.bg_color;
     console.buf.copy_from_slice(&state.buf);
-    
+
     console.redraw_all();
     if console.cursor_active {
         console.show_cursor();
     }
-    
+
     set_display_mode(DisplayMode::Console);
 }
 

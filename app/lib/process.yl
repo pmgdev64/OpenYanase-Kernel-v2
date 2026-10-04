@@ -1,0 +1,21 @@
+package process;
+
+fn get_pid() {
+    return syscall(103);
+}
+
+fn get_uptime() {
+    return syscall(104);
+}
+
+fn get_memory() {
+    return syscall(105);
+}
+
+fn run(name) {
+    return syscall(106, name);
+}
+
+fn exit(code) {
+    syscall(107, code);
+}

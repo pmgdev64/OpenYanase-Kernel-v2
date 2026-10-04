@@ -249,7 +249,25 @@ pub fn init_keyboard() {
     crate::idt::set_gate(33, keyboard_interrupt_stub as usize as u64);
 }
 
+// Lock bàn phím dùng chung giữa IRQ1 (push) và code thường (pop). Nếu IRQ1 bắn
+// khi code thường đang giữ lock thì handler spin mãi -> treo kernel.
+// Giữ lock thì phải tắt ngắt, xong khôi phục đúng trạng thái cũ.
+#[inline(always)]
+fn irq_save() -> bool {
+    let flags: u64;
+    unsafe { core::arch::asm!("pushfq", "pop {}", "cli", out(reg) flags); }
+    (flags & 0x200) != 0
+}
+
+#[inline(always)]
+fn irq_restore(was_enabled: bool) {
+    if was_enabled {
+        unsafe { core::arch::asm!("sti", options(nomem, nostack)); }
+    }
+}
+
 pub fn push_char(ch: char) {
+    let irq_flags = irq_save();
     while KEYBOARD_LOCK.compare_exchange(false, true, 
         Ordering::Acquire, Ordering::Relaxed).is_err() {
         core::hint::spin_loop();
@@ -267,9 +285,11 @@ pub fn push_char(ch: char) {
     }
 
     KEYBOARD_LOCK.store(false, Ordering::Release);
+    irq_restore(irq_flags);
 }
 
 pub fn pop_char() -> Option<char> {
+    let irq_flags = irq_save();
     while KEYBOARD_LOCK.compare_exchange(false, true, 
         Ordering::Acquire, Ordering::Relaxed).is_err() {
         core::hint::spin_loop();
@@ -287,6 +307,7 @@ pub fn pop_char() -> Option<char> {
     };
 
     KEYBOARD_LOCK.store(false, Ordering::Release);
+    irq_restore(irq_flags);
     result
 }
 

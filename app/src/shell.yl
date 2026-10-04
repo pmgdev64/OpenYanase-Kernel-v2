@@ -1,0 +1,256 @@
+package globalsys.shell;
+
+class Shell {
+    fn banner() {
+        io.write_line("");
+        io.write_line("  ================================");
+        io.write_line("   OpenYanase Shell v2.0");
+        io.write_line("   Standalone console application");
+        io.write_line("  ================================");
+        io.write_line("");
+    }
+
+    fn help() {
+        io.write_line("");
+        io.write_line("Built-in commands:");
+        io.write_line("  help, h        - show this help");
+        io.write_line("  banner, b      - show banner");
+        io.write_line("  clear, cls, c  - clear screen");
+        io.write_line("  info, i        - shell info");
+        io.write_line("  version, v     - version info");
+        io.write_line("  demo           - run globalsys/main.abp");
+        io.write_line("  reboot         - reboot system");
+        io.write_line("  shutdown       - shutdown system");
+        io.write_line("  exit, quit, q  - exit shell");
+        io.write_line("");
+        io.write_line("Any other input is treated as a package name");
+        io.write_line("(with or without .abp) and executed via ABP loader.");
+        io.write_line("");
+    }
+
+    fn info() {
+        io.write_line("[shell] OpenYanase userspace shell");
+        io.write_line("[shell] Package: globalsys/shell.abp");
+        io.write_line("[shell] Runtime: YBC VM (int 0x80 syscalls)");
+    }
+
+    fn version() {
+        io.write_line("OpenYanase Shell v2.0");
+        io.write_line("Kernel: OpenYanase v2.0.0");
+    }
+
+    fn run_demo() {
+        io.write_line("[shell] launching globalsys/main.abp ...");
+        system.exec("globalsys/main.abp");
+        io.write_line("[shell] app returned");
+    }
+
+    fn m1(buf, len, a) {
+        if (len != 1) { return 0; }
+        if (buf[0] != a) { return 0; }
+        return 1;
+    }
+
+    fn m3(buf, len, a, b, c) {
+        if (len != 3) { return 0; }
+        if (buf[0] != a) { return 0; }
+        if (buf[1] != b) { return 0; }
+        if (buf[2] != c) { return 0; }
+        return 1;
+    }
+
+    fn m4(buf, len, a, b, c, d) {
+        if (len != 4) { return 0; }
+        if (buf[0] != a) { return 0; }
+        if (buf[1] != b) { return 0; }
+        if (buf[2] != c) { return 0; }
+        if (buf[3] != d) { return 0; }
+        return 1;
+    }
+
+    fn m5(buf, len, a, b, c, d, e) {
+        if (len != 5) { return 0; }
+        if (buf[0] != a) { return 0; }
+        if (buf[1] != b) { return 0; }
+        if (buf[2] != c) { return 0; }
+        if (buf[3] != d) { return 0; }
+        if (buf[4] != e) { return 0; }
+        return 1;
+    }
+
+    fn m6(buf, len, a, b, c, d, e, f) {
+        if (len != 6) { return 0; }
+        if (buf[0] != a) { return 0; }
+        if (buf[1] != b) { return 0; }
+        if (buf[2] != c) { return 0; }
+        if (buf[3] != d) { return 0; }
+        if (buf[4] != e) { return 0; }
+        if (buf[5] != f) { return 0; }
+        return 1;
+    }
+
+    fn m7(buf, len, a, b, c, d, e, f, g) {
+        if (len != 7) { return 0; }
+        if (buf[0] != a) { return 0; }
+        if (buf[1] != b) { return 0; }
+        if (buf[2] != c) { return 0; }
+        if (buf[3] != d) { return 0; }
+        if (buf[4] != e) { return 0; }
+        if (buf[5] != f) { return 0; }
+        if (buf[6] != g) { return 0; }
+        return 1;
+    }
+
+    fn m8(buf, len, a, b, c, d, e, f, g, h) {
+        if (len != 8) { return 0; }
+        if (buf[0] != a) { return 0; }
+        if (buf[1] != b) { return 0; }
+        if (buf[2] != c) { return 0; }
+        if (buf[3] != d) { return 0; }
+        if (buf[4] != e) { return 0; }
+        if (buf[5] != f) { return 0; }
+        if (buf[6] != g) { return 0; }
+        if (buf[7] != h) { return 0; }
+        return 1;
+    }
+
+    fn execute(buf, len) {
+        if (len == 0) { return 0; }
+
+        if (this.m1(buf, len, 104) == 1) { this.help(); return 0; }
+        if (this.m4(buf, len, 104, 101, 108, 112) == 1) { this.help(); return 0; }
+
+        if (this.m1(buf, len, 98) == 1) { this.banner(); return 0; }
+        if (this.m6(buf, len, 98, 97, 110, 110, 101, 114) == 1) { this.banner(); return 0; }
+
+        if (this.m1(buf, len, 99) == 1) { console.clear(); return 0; }
+        if (this.m3(buf, len, 99, 108, 115) == 1) { console.clear(); return 0; }
+        if (this.m5(buf, len, 99, 108, 101, 97, 114) == 1) { console.clear(); return 0; }
+
+        if (this.m1(buf, len, 105) == 1) { this.info(); return 0; }
+        if (this.m4(buf, len, 105, 110, 102, 111) == 1) { this.info(); return 0; }
+
+        if (this.m1(buf, len, 118) == 1) { this.version(); return 0; }
+        if (this.m7(buf, len, 118, 101, 114, 115, 105, 111, 110) == 1) { this.version(); return 0; }
+
+        if (this.m4(buf, len, 100, 101, 109, 111) == 1) { this.run_demo(); return 0; }
+
+        if (this.m6(buf, len, 114, 101, 98, 111, 111, 116) == 1) {
+            io.write_line("[shell] rebooting...");
+            system.reboot();
+            return 0;
+        }
+
+        if (this.m8(buf, len, 115, 104, 117, 116, 100, 111, 119, 110) == 1) {
+            io.write_line("[shell] shutting down...");
+            system.shutdown();
+            return 0;
+        }
+
+        if (this.m1(buf, len, 113) == 1) { return 1; }
+        if (this.m4(buf, len, 113, 117, 105, 116) == 1) { return 1; }
+        if (this.m4(buf, len, 101, 120, 105, 116) == 1) { return 1; }
+
+        // Fallback: coi input như tên package, kernel tự thêm .abp
+        let r = system.exec_arr(buf, len);
+        if (r == 0) { return 0; }
+
+        io.write_str("[shell] cannot run '");
+        let j = 0;
+        while (j < len) {
+            io.write_char(buf[j]);
+            j = j + 1;
+        }
+        io.write_line("'");
+
+        if (r == -3) {
+            io.write_line("[shell] file not found in initrd");
+        }
+        if (r == -4) {
+            io.write_line("[shell] permission denied");
+        }
+        if (r == -2) {
+            io.write_line("[shell] exec depth limit reached");
+        }
+        if (r == -1) {
+            io.write_line("[shell] invalid package name");
+        }
+        return 0;
+    }
+
+    fn wait_key() {
+        let k = 0;
+        while (k == 0) {
+            let c = io.read_char();
+            if (c > 0) {
+                k = c;
+            } else {
+                time.sleep_ms(20);
+            }
+        }
+        return k;
+    }
+
+    fn run() {
+        this.banner();
+        io.write_line("Type 'help' for commands, 'exit' to quit.");
+
+        // Buffer 32 phần tử, dùng mảng 1 dòng không trailing comma.
+        let buf = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+        let running = 1;
+        while (running == 1) {
+            io.write_str("oy> ");
+            let len = 0;
+            let eol = 0;
+
+            while (eol == 0) {
+                let k = this.wait_key();
+
+                if (k == 10) {
+                    eol = 1;
+                    io.write_char(10);
+                }
+                if (k == 13) {
+                    eol = 1;
+                    io.write_char(10);
+                }
+                if (k == 8) {
+                    if (len > 0) {
+                        len = len - 1;
+                        buf[len] = 0;
+                        console.backspace();
+                    }
+                }
+                if (k > 31) {
+                    if (k < 127) {
+                        if (len < 28) {
+                            buf[len] = k;
+                            len = len + 1;
+                            io.write_char(k);
+                        }
+                    }
+                }
+            }
+
+            let quit = this.execute(buf, len);
+            if (quit == 1) {
+                running = 0;
+            } else {
+                let j = 0;
+                while (j < 32) {
+                    buf[j] = 0;
+                    j = j + 1;
+                }
+            }
+        }
+
+        io.write_line("Bye.");
+    }
+}
+
+fn main() {
+    let s = new Shell();
+    s.run();
+}

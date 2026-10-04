@@ -30,42 +30,29 @@ pub fn octal_to_u32(octal_bytes: &[u8]) -> u32 {
     result
 }
 
-fn name_matches(tar_name: &[u8], target: &str) -> bool {
-    let mut name_len = 0;
-    while name_len < tar_name.len() && tar_name[name_len] != 0 {
-        name_len += 1;
+pub fn normalize_tar_name(s: &str) -> &str {
+    let mut name = s;
+    if name.starts_with("./") {
+        name = &name[2..];
     }
-
-    let actual_name = &tar_name[..name_len];
-    let target_bytes = target.as_bytes();
-
-    if actual_name.len() < target_bytes.len() {
-        return false;
+    if name.starts_with('/') {
+        name = &name[1..];
     }
-
-    let suffix = &actual_name[actual_name.len() - target_bytes.len()..];
-
-    if suffix == target_bytes {
-        if actual_name.len() == target_bytes.len() || actual_name[actual_name.len() - target_bytes.len() - 1] == b'/' {
-            return true;
-        }
-    }
-
-    false
+    name
 }
 
 pub unsafe fn find_file_in_tar(tar_start: *const u8, target_filename: &str) -> Option<&'static [u8]> {
-    // Kiểm tra null
     if tar_start.is_null() {
         return None;
     }
 
-    // Acquire lock
     while INITRD_LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
         core::hint::spin_loop();
     }
 
     let mut current_ptr = tar_start;
+    let clean_target = normalize_tar_name(target_filename).trim_matches('/');
+
     let result = loop {
         let header = &*(current_ptr as *const TarHeader);
 
@@ -74,11 +61,18 @@ pub unsafe fn find_file_in_tar(tar_start: *const u8, target_filename: &str) -> O
         }
 
         let file_size = octal_to_u32(&header.size);
+        let mut name_len = 0;
+        while name_len < header.name.len() && header.name[name_len] != 0 {
+            name_len += 1;
+        }
 
-        if name_matches(&header.name, target_filename) {
-            let data_ptr = current_ptr.add(512);
-            let slice = core::slice::from_raw_parts(data_ptr, file_size as usize);
-            break Some(slice);
+        if let Ok(raw_name) = core::str::from_utf8(&header.name[..name_len]) {
+            let clean_name = normalize_tar_name(raw_name).trim_matches('/');
+            if clean_name == clean_target {
+                let data_ptr = current_ptr.add(512);
+                let slice = core::slice::from_raw_parts(data_ptr, file_size as usize);
+                break Some(slice);
+            }
         }
 
         let blocks = (file_size + 511) / 512;
@@ -86,8 +80,54 @@ pub unsafe fn find_file_in_tar(tar_start: *const u8, target_filename: &str) -> O
         current_ptr = current_ptr.add(skip_size);
     };
 
-    // Release lock
     INITRD_LOCK.store(false, Ordering::Release);
-    
     result
+}
+
+// Sửa F: FnMut lấy tham số &'static str để truyền đúng lifetime ra ngoài closure
+pub unsafe fn for_each_file_with_prefix<F: FnMut(&'static str, u8, &'static [u8])>(
+    tar_start: *const u8,
+    prefix: &str,
+    mut callback: F,
+) {
+    if tar_start.is_null() {
+        return;
+    }
+
+    while INITRD_LOCK.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+
+    let mut current_ptr = tar_start;
+    loop {
+        let header = &*(current_ptr as *const TarHeader);
+        if header.name[0] == 0 {
+            break;
+        }
+
+        let mut name_len = 0;
+        while name_len < header.name.len() && header.name[name_len] != 0 {
+            name_len += 1;
+        }
+
+        let file_size = octal_to_u32(&header.size);
+
+        // Tạo slice &'static trực tiếp từ vùng nhớ Initrd RAM
+        let name_bytes = core::slice::from_raw_parts(header.name.as_ptr(), name_len);
+        if let Ok(raw_name) = core::str::from_utf8(name_bytes) {
+            let clean_name = normalize_tar_name(raw_name);
+            let tf = header.typeflag;
+            if (tf == b'0' || tf == 0 || tf == b'5') && clean_name.starts_with(prefix) {
+                let data_ptr = current_ptr.add(512);
+                let slice = core::slice::from_raw_parts(data_ptr, file_size as usize);
+                callback(clean_name, tf, slice);
+            }
+        }
+
+        let blocks = (file_size + 511) / 512;
+        let skip_size = 512 + (blocks * 512) as usize;
+        current_ptr = current_ptr.add(skip_size);
+    }
+
+    INITRD_LOCK.store(false, Ordering::Release);
 }

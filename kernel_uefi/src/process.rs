@@ -1,9 +1,11 @@
 // src/process.rs
 use crate::ybc_vm::YbcVm;
-use crate::ybc::{self, YbcHeader};
+use crate::ybc;
 
 pub const MAX_PROCESSES: usize = 8;
+static mut EXIT_REQUESTED: Option<i32> = None;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq)]
 pub enum ProcState {
     Unused,
@@ -15,7 +17,7 @@ pub struct Process {
     pub state: ProcState,
     pub name: [u8; 32],
     pub name_len: usize,
-    pub data: [u8; 65536],   // buffer chứa toàn bộ .ybc đã copy vào (đơn giản hoá, chưa paging riêng)
+    pub data: [u8; 65536],
     pub data_len: usize,
     pub pc_saved: usize,
     pub steps_budget: u32,
@@ -36,20 +38,49 @@ impl Process {
 }
 
 static mut PROCESSES: [Process; MAX_PROCESSES] = [const { Process::new() }; MAX_PROCESSES];
-static mut CURRENT_PID: Option<usize> = None;
+pub static mut CURRENT_PID: Option<usize> = None;
 
-/// Validate 1 vùng con trỏ nằm trong buffer .ybc của process hiện tại đang chạy syscall.
-/// Placeholder cho tới khi có paging per-process thật; hiện dùng bounds-check trên buffer copy.
 pub fn validate_user_range(ptr: u64, len: u64) -> bool {
     unsafe {
         let pid = match CURRENT_PID {
             Some(p) => p,
             None => return false,
         };
+
+        if pid >= MAX_PROCESSES {
+            return false;
+        }
+
         let proc = &PROCESSES[pid];
         let base = proc.data.as_ptr() as u64;
         let end = base + proc.data_len as u64;
-        ptr >= base && ptr.checked_add(len).map_or(false, |e| e <= end)
+
+        if ptr == 0 {
+            return false;
+        }
+
+        if ptr < base || ptr >= end {
+            return false;
+        }
+
+        if ptr + len > end {
+            return false;
+        }
+
+        true
+    }
+}
+
+/// Process đang chạy có đúng tên package này không (dùng cho kiểm tra quyền).
+pub fn current_is(name: &str) -> bool {
+    unsafe {
+        match CURRENT_PID {
+            Some(p) if p < MAX_PROCESSES => {
+                let pr = &PROCESSES[p];
+                &pr.name[..pr.name_len] == name.as_bytes()
+            }
+            _ => false,
+        }
     }
 }
 
@@ -81,36 +112,70 @@ pub fn spawn_ybc(name: &str, ybc_bytes: &[u8]) -> Result<usize, &'static str> {
     Err("no free process slot")
 }
 
-/// Chạy 1 process cho tới khi Halt hoặc lỗi — chạy đồng bộ (blocking) trong bản đầu tiên,
-/// chưa có scheduler đa nhiệm thật; đây là bước "chạy được trước, cô lập/đa nhiệm sau"
+pub fn request_exit(code: i32) {
+    unsafe { EXIT_REQUESTED = Some(code); }
+}
+
+/// App thoát (bình thường hoặc lỗi) -> trả màn hình về vtty.
+/// Không bật demo của kernel: demo chỉ dành cho lệnh `gfx` / F1.
+unsafe fn return_to_console() {
+    crate::graphics::gfx::set_demo_mode(false);
+    if crate::console::get_display_mode() == crate::console::DisplayMode::Graphics {
+        crate::graphics::gfx::clear_buffers();
+        crate::graphics::gfx::exit_graphics_mode(); // restore console + set Console mode
+    }
+}
+
 pub fn run_to_completion(pid: usize) -> Result<(), &'static str> {
     unsafe {
+        EXIT_REQUESTED = None;
         let proc_ptr = &mut PROCESSES[pid] as *mut Process;
         let proc = &mut *proc_ptr;
         if proc.state != ProcState::Running {
             return Err("process not running");
         }
 
-        let header = ybc::parse_header(&proc.data[..proc.data_len])
-            .ok_or("header parse failed after validate (unexpected)")?;
+        let _header = ybc::parse_header(&proc.data[..proc.data_len])
+            .ok_or("header parse failed")?;
+
+        // Cho phép exec lồng nhau (shell app chạy app khác): nhớ process cha
+        // và chế độ màn hình lúc bắt đầu để trả lại đúng khi kết thúc.
+        let prev_pid = CURRENT_PID;
+        let start_mode = crate::console::get_display_mode();
 
         CURRENT_PID = Some(pid);
 
-        let mut vm = YbcVm::new(&proc.data[..proc.data_len], header);
+        let mut vm = match YbcVm::new(&proc.data[..proc.data_len]) {
+            Ok(v) => v,
+            Err(e) => {
+                proc.state = ProcState::Unused;
+                CURRENT_PID = prev_pid;
+                return Err(e);
+            }
+        };
 
-        loop {
-            match vm.run(5000) {
-                Ok(true) => break,   // Halt
-                Ok(false) => continue, // hết timeslice, chạy tiếp (chưa có scheduler nhường CPU thật)
-                Err(_) => {
-                    crate::println!("Process '{}' crashed (VM error)", core::str::from_utf8(&proc.name[..proc.name_len]).unwrap_or("?"));
-                    break;
-                }
+        // FIX: log VM error thay vì nuốt. App chết phải để lại dấu vết.
+        match vm.run() {
+            Ok(_exit_code) => {
+                crate::serial::serial_write_str("PROC: app exited normally\r\n");
+            }
+            Err(e) => {
+                crate::serial::serial_write_str("PROC: VM ERROR: ");
+                crate::serial::serial_write_str(e);
+                crate::serial::serial_write_str("\r\n");
             }
         }
 
-        proc.state = ProcState::Exited;
-        CURRENT_PID = None;
+        // Giải phóng slot, nếu không sau 8 lần chạy sẽ hết process slot.
+        proc.state = ProcState::Unused;
+        CURRENT_PID = prev_pid;
+
+        // Thoát app -> về vtty, nhưng chỉ khi app được chạy từ vtty. Nếu cha đang
+        // ở Graphics (ví dụ desktop chạy app con) thì không đụng vào màn hình.
+        if start_mode == crate::console::DisplayMode::Console {
+            return_to_console();
+        }
+
         Ok(())
     }
 }

@@ -20,4 +20,17 @@ codegen-units = 1
 strip = true
 
 [dependencies]
-x86_64 = "0.15"
+# 1. Force ab_glyph to use libm
+ab_glyph = { version = "0.2.32", default-features = false, features = ["libm"] }
+
+# 2. Manually force the sub-rasterizer to use libm
+ab_glyph_rasterizer = { version = "0.1.10", default-features = false, features = ["libm"] }
+
+# 3. Manually force ttf-parser to use its no-std float engine
+ttf-parser = { version = "0.25.1", default-features = false, features = ["no-std-float"] }
+
+# 4. Explicitly add core_maths so ttf-parser can find it
+core_maths = "0.1.1"
+
+# 5. Keep your math crate
+libm = "0.2.16"

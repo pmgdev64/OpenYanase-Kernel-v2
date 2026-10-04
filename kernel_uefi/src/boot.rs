@@ -3,7 +3,6 @@ use core::arch::global_asm;
 
 global_asm!(
 r#"
-    // Intel syntax is default, no need to specify
     .section .multiboot, "a"
     .align 8
 multiboot_header:
@@ -12,16 +11,28 @@ multiboot_header:
     .long header_end - multiboot_header
     .long -(0xE85250D6 + 0 + (header_end - multiboot_header))
 
+    // 1. Tag yêu cầu Framebuffer
     .align 8
 framebuffer_tag_start:
     .short 5
     .short 1
     .long 20
-    .long 800
-    .long 600
+    .long 1280
+    .long 720
     .long 32
 framebuffer_tag_end:
 
+    // 2. Tag yêu cầu thông tin ACPI (Information Request Tag - Type 1)
+    .align 8
+acpi_req_tag_start:
+    .short 1
+    .short 0
+    .long 16
+    .long 14
+    .long 15
+acpi_req_tag_end:
+
+    // Tag kết thúc Multiboot2 Header
     .align 8
     .short 0
     .short 0
@@ -29,13 +40,14 @@ framebuffer_tag_end:
 header_end:
 
     .section .text
+    .global _kernel_start
+_kernel_start:
     .code32
     .global _start
 _start:
     cli
 
-    mov ebp, eax
-    mov ebx, ebx
+    mov esi, eax
 
     mov edi, offset pml4_table
     xor eax, eax
@@ -83,8 +95,8 @@ _start:
 
     .code64
 long_mode_start:
-    mov rdi, rbp
-    mov rsi, rbx
+    mov edi, esi
+    mov esi, ebx
 
     mov ax, 0x10
     mov ds, ax
@@ -129,7 +141,10 @@ pd_table_3:
 
     .align 16
 stack_bottom:
-    .space 64 * 1024
+    .space 256 * 1024
 stack_top:
+
+    .global _kernel_end
+_kernel_end:
 "#
 );

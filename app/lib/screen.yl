@@ -1,0 +1,9 @@
+package screen;
+
+fn width() {
+    return syscall(9);
+}
+
+fn height() {
+    return syscall(10);
+}

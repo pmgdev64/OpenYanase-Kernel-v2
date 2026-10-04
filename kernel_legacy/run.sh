@@ -30,13 +30,6 @@ if [ -f "app/compiler.py" ] && [ -f "$SOURCES_DIR" ]; then
     python3 app/compiler.py "$SOURCES_DIR" "initrd_root/$OUTPUT_NAME"
 fi
 
-# Compile driver nếu có - DÙNG driver/driver_compiler.py (QUAN TRỌNG)
-if [ -f "driver/driver_compiler.py" ] && [ -f "$DRIVER_SOURCES_DIR" ]; then
-    echo "Compiling driver..."
-    # SỬA: dùng driver_compiler.py chứ không phải app/compiler.py
-    python3 driver/driver_compiler.py "$DRIVER_SOURCES_DIR" "initrd_root/$DRIVER_OUTPUT_NAME"
-fi
-
 # 3. Copy Kernel binary
 cp "$KERNEL_BIN" "$BOOT_DIR/kernel"
 
@@ -149,7 +142,4 @@ fi
 qemu-system-i386 \
     -cdrom kernel.iso \
     -serial stdio \
-    -m 256M \
-    -audiodev dsound,id=audio0 \
-    -machine pcspk-audiodev=audio0 \
-    -device AC97,audiodev=audio0
+    -m 256M 

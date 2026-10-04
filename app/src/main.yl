@@ -1,0 +1,428 @@
+package sys.desktop;
+
+import io;
+import process;
+import time;
+
+// Fix bug "mất màu": gfx.draw_rect trong compiler YBC bị map sang syscall
+// fill_rect → phủ đè cả cửa sổ. Giải pháp:
+//   1. Kernel: tách syscall 24 = outline, 2/22 = fill (đã sửa ở syscall.rs).
+//   2. App: KHÔNG dùng gfx.draw_rect nữa — vẽ border bằng 4 fill_rect mỏng
+//      để chắc chắn chạy đúng bất kể compiler map syscall thế nào.
+
+class App {
+    win_x;
+    win_y;
+    win_w;
+    win_h;
+    win_title;
+    win_state;
+
+    order;
+    order_count;
+    active;
+
+    drag_win;
+    drag_dx;
+    drag_dy;
+
+    prev_pressed;
+    menu_open;
+    running;
+
+    fn init() {
+        io.write_line("Desktop starting...");
+        gfx.init();
+        gfx.clear(0x0B1020, 0);
+
+        this.win_x = [100, 350, 0, 0, 0, 0, 0, 0];
+        this.win_y = [80, 180, 0, 0, 0, 0, 0, 0];
+        this.win_w = [400, 350, 360, 360, 360, 360, 360, 360];
+        this.win_h = [280, 220, 240, 240, 240, 240, 240, 240];
+        this.win_title = ["Window 1", "Window 2", "Window 3", "Window 4",
+                          "Window 5", "Window 6", "Window 7", "Window 8"];
+        this.win_state = [1, 1, 0, 0, 0, 0, 0, 0];
+
+        this.order = [0, 1, 0, 0, 0, 0, 0, 0];
+        this.order_count = 2;
+        this.active = 1;
+
+        this.drag_win = 0;
+        this.drag_dx = 0;
+        this.drag_dy = 0;
+
+        this.prev_pressed = 0;
+        this.menu_open = 0;
+        this.running = 1;
+    }
+
+    // ---------- window manager ----------
+    fn find_active() {
+        this.active = 99;
+        let p = this.order_count - 1;
+        while p >= 0 && this.active == 99 {
+            let id = this.order[p];
+            if this.win_state[id] == 1 { this.active = id; }
+            p = p - 1;
+        }
+    }
+
+    fn focus(id) {
+        let found = 99;
+        let p = 0;
+        while p < this.order_count {
+            if this.order[p] == id { found = p; }
+            p = p + 1;
+        }
+        if found < 99 {
+            let j = found;
+            while j < this.order_count - 1 {
+                this.order[j] = this.order[j + 1];
+                j = j + 1;
+            }
+            this.order[this.order_count - 1] = id;
+        }
+    }
+
+    fn open_window() {
+        let slot = 99;
+        let i = 0;
+        while i < 8 {
+            if this.win_state[i] == 0 && slot == 99 { slot = i; }
+            i = i + 1;
+        }
+        if slot < 99 {
+            this.win_x[slot] = 60 + slot * 30;
+            this.win_y[slot] = 40 + slot * 30;
+            this.win_w[slot] = 360;
+            this.win_h[slot] = 240;
+            this.win_state[slot] = 1;
+            this.order[this.order_count] = slot;
+            this.order_count = this.order_count + 1;
+        }
+    }
+
+    fn close_window(id) {
+        this.win_state[id] = 0;
+        if this.drag_win == id + 1 { this.drag_win = 0; }
+
+        let found = 99;
+        let p = 0;
+        while p < this.order_count {
+            if this.order[p] == id { found = p; }
+            p = p + 1;
+        }
+        if found < 99 {
+            let j = found;
+            while j < this.order_count - 1 {
+                this.order[j] = this.order[j + 1];
+                j = j + 1;
+            }
+            this.order_count = this.order_count - 1;
+        }
+    }
+
+    // ---------- input ----------
+    fn handle_click(mx, my) {
+        let handled = 0;
+        let ty = screen.height() - 32;
+        let menu_was = this.menu_open;
+        this.menu_open = 0;
+        this.find_active();
+
+        if menu_was == 1 {
+            let menu_y = ty - 60;
+            if mx >= 4 && mx < 144 && my >= menu_y && my < menu_y + 56 {
+                handled = 1;
+                if my < menu_y + 28 { this.open_window(); }
+                else { this.running = 0; }
+            }
+        }
+
+        if handled == 0 && my >= ty {
+            handled = 1;
+            if mx < 88 {
+                if menu_was == 0 { this.menu_open = 1; }
+            } else {
+                let k = 0;
+                let i = 0;
+                while i < 8 {
+                    if this.win_state[i] >= 1 {
+                        let bx = 96 + k * 128;
+                        if mx >= bx && mx < bx + 120 {
+                            if this.win_state[i] == 2 {
+                                this.win_state[i] = 1;
+                                this.focus(i);
+                            } else {
+                                if this.active == i { this.win_state[i] = 2; }
+                                else { this.focus(i); }
+                            }
+                        }
+                        k = k + 1;
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+
+        if handled == 0 {
+            let p = this.order_count - 1;
+            while p >= 0 && handled == 0 {
+                let id = this.order[p];
+                if this.win_state[id] == 1 {
+                    let wx = this.win_x[id];
+                    let wy = this.win_y[id];
+                    let ww = this.win_w[id];
+                    let wh = this.win_h[id];
+
+                    if mx >= wx && mx < wx + ww && my >= wy && my < wy + wh {
+                        handled = 1;
+                        let in_title = 0;
+                        if my >= wy + 4 && my < wy + 20 { in_title = 1; }
+
+                        if in_title == 1 && mx >= wx + ww - 20 && mx < wx + ww - 4 {
+                            this.close_window(id);
+                        } else {
+                            if in_title == 1 && mx >= wx + ww - 40 && mx < wx + ww - 24 {
+                                this.win_state[id] = 2;
+                            } else {
+                                this.focus(id);
+                                if my < wy + 24 {
+                                    this.drag_win = id + 1;
+                                    this.drag_dx = mx - wx;
+                                    this.drag_dy = my - wy;
+                                }
+                            }
+                        }
+                    }
+                }
+                p = p - 1;
+            }
+        }
+
+        if handled == 0 {
+            if mx >= 24 && mx < 72 && my >= 24 && my < 92 { this.open_window(); }
+            if mx >= 24 && mx < 72 && my >= 112 && my < 180 { this.open_window(); }
+        }
+    }
+
+    fn handle_events(mx, my, pressed) {
+        let click = 0;
+        if pressed == 1 && this.prev_pressed == 0 { click = 1; }
+        if pressed == 0 { this.drag_win = 0; }
+
+        if this.drag_win >= 1 {
+            let id = this.drag_win - 1;
+            let nx = mx - this.drag_dx;
+            let ny = my - this.drag_dy;
+            let max_x = screen.width() - this.win_w[id];
+            let max_y = screen.height() - 32 - 24;
+            if nx >= max_x { nx = max_x; }
+            if ny >= max_y { ny = max_y; }
+            if nx < 0 { nx = 0; }
+            if ny < 0 { ny = 0; }
+            this.win_x[id] = nx;
+            this.win_y[id] = ny;
+        }
+
+        if click == 1 { this.handle_click(mx, my); }
+        this.prev_pressed = pressed;
+    }
+
+    // ---------- drawing helpers ----------
+    // Vẽ border bằng 4 cạnh mỏng thay vì gfx.draw_rect — tránh bug compiler.
+    fn draw_border(x, y, w, h, color) {
+        let bw = 1;
+        gfx.fill_rect(x, y, w, bw, color);                        // top
+        gfx.fill_rect(x, y + h - bw, w, bw, color);               // bottom
+        gfx.fill_rect(x, y, bw, h, color);                        // left
+        gfx.fill_rect(x + w - bw, y, bw, h, color);               // right
+    }
+
+    fn paint_shadow(x, y, w, h) {
+        let sx = x + 4;
+        let sy = y + 4;
+        gfx.fill_rect(sx, sy, w, h, 0x1A1A20);
+    }
+
+    fn paint_body(x, y, w, h) {
+        gfx.fill_rect(x, y, w, h, 0xE8ECF2);
+    }
+
+    fn paint_titlebar_active(x, y, w) {
+        let tb_h = 24;
+        gfx.fill_rect(x, y, w, tb_h, 0x1E5EB8);
+    }
+
+    fn paint_titlebar_inactive(x, y, w) {
+        let tb_h = 24;
+        gfx.fill_rect(x, y, w, tb_h, 0x8A8FA0);
+    }
+
+    fn paint_buttons(x, y, w) {
+        let btn = 16;
+        let mx = x + w - 40;
+        let cx = x + w - 20;
+        let by = y + 4;
+        gfx.fill_rect(mx, by, btn, btn, 0xD8B400);   // minimize (vàng)
+        gfx.fill_rect(cx, by, btn, btn, 0xD03030);   // close (đỏ)
+    }
+
+    fn draw_title_text(id, x, y) {
+        let tx = x + 8;
+        let ty = y + 8;
+        if id == 0 { gfx.draw_text(tx, ty, "Window 1", 0xFFFFFF); }
+        else {
+            if id == 1 { gfx.draw_text(tx, ty, "Window 2", 0xFFFFFF); }
+            else {
+                if id == 2 { gfx.draw_text(tx, ty, "Window 3", 0xFFFFFF); }
+                else { gfx.draw_text(tx, ty, "Window N", 0xFFFFFF); }
+            }
+        }
+    }
+
+    fn draw_button_glyphs(x, y, w) {
+        let my_ = x + w - 36;
+        let cy_ = x + w - 16;
+        let by = y + 8;
+        gfx.draw_text(my_, by, "_", 0x000000);
+        gfx.draw_text(cy_, by, "X", 0xFFFFFF);
+    }
+
+    fn draw_info_text(x, y) {
+        gfx.draw_text(x + 10, y + 40, "Desktop v1.1", 0x303840);
+        gfx.draw_text(x + 10, y + 60, "Drag title to move", 0x606870);
+        gfx.draw_text(x + 10, y + 80, "_ minimize, X close", 0x606870);
+    }
+
+    fn draw_window(x, y, w, h, title_id, is_active) {
+        this.paint_shadow(x, y, w, h);
+        this.paint_body(x, y, w, h);
+
+        if is_active == 1 {
+            this.paint_titlebar_active(x, y, w);
+        } else {
+            this.paint_titlebar_inactive(x, y, w);
+        }
+
+        this.draw_title_text(title_id, x, y);
+        this.paint_buttons(x, y, w);
+        this.draw_button_glyphs(x, y, w);
+
+        // Border 1px — 4 cạnh mỏng, không phủ đè gì cả
+        this.draw_border(x, y, w, h, 0x506070);
+
+        this.draw_info_text(x, y);
+    }
+
+    fn draw_taskbar() {
+        let ty = screen.height() - 32;
+        let sw = screen.width();
+        gfx.fill_rect(0, ty, sw, 32, 0x181C24);
+        gfx.fill_rect(0, ty, sw, 1, 0x404A60);
+
+        if this.menu_open == 1 {
+            gfx.fill_rect(4, ty + 4, 80, 24, 0x4A7AC8);
+        } else {
+            gfx.fill_rect(4, ty + 4, 80, 24, 0x2A5AA8);
+        }
+        gfx.draw_text(20, ty + 12, "Start", 0xFFFFFF);
+
+        let k = 0;
+        let i = 0;
+        while i < 8 {
+            if this.win_state[i] >= 1 {
+                let bx = 96 + k * 128;
+                let is_active_btn = 0;
+                if this.active == i { is_active_btn = 1; }
+                let is_minimized = 0;
+                if this.win_state[i] == 2 { is_minimized = 1; }
+
+                if is_active_btn == 1 && is_minimized == 1 {
+                    gfx.fill_rect(bx, ty + 4, 120, 24, 0x2A2E38);
+                } else {
+                    if is_active_btn == 1 {
+                        gfx.fill_rect(bx, ty + 4, 120, 24, 0x5A6280);
+                    } else {
+                        if is_minimized == 1 {
+                            gfx.fill_rect(bx, ty + 4, 120, 24, 0x22262E);
+                        } else {
+                            gfx.fill_rect(bx, ty + 4, 120, 24, 0x353A48);
+                        }
+                    }
+                }
+                gfx.draw_text(bx + 8, ty + 12, this.win_title[i], 0xFFFFFF);
+                k = k + 1;
+            }
+            i = i + 1;
+        }
+    }
+
+    fn draw_menu() {
+        let menu_y = screen.height() - 32 - 60;
+        gfx.fill_rect(4, menu_y, 140, 56, 0x2A2E38);
+        // Border của menu bằng 4 cạnh mỏng
+        this.draw_border(4, menu_y, 140, 56, 0x5A6280);
+        gfx.draw_text(14, menu_y + 10, "New Window", 0xFFFFFF);
+        gfx.draw_text(14, menu_y + 38, "Exit", 0xFFFFFF);
+    }
+
+    fn render() {
+        let w = screen.width();
+        let h = screen.height();
+
+        let bands = 40;
+        let step = h / bands;
+        let i = 0;
+        while i < bands + 1 {
+            let intensity = 20 + (i * 30 / bands);
+            let color = (intensity * 65536) + (intensity * 256) + (intensity + 10);
+            gfx.fill_rect(0, i * step, w, step + 1, color);
+            i = i + 1;
+        }
+
+        gfx.fill_rect(24, 24, 48, 48, 0x3C78C8);
+        gfx.draw_text(28, 78, "Files", 0xFFFFFF);
+        gfx.fill_rect(24, 112, 48, 48, 0xC89C3C);
+        gfx.draw_text(28, 166, "Notes", 0xFFFFFF);
+
+        this.find_active();
+        let p = 0;
+        while p < this.order_count {
+            let id = this.order[p];
+            if this.win_state[id] == 1 {
+                let wx = this.win_x[id];
+                let wy = this.win_y[id];
+                let ww = this.win_w[id];
+                let wh = this.win_h[id];
+                let ia = 0;
+                if this.active == id { ia = 1; }
+                this.draw_window(wx, wy, ww, wh, id, ia);
+            }
+            p = p + 1;
+        }
+
+        this.draw_taskbar();
+        if this.menu_open == 1 { this.draw_menu(); }
+
+        screen.flush();
+    }
+
+    fn run() {
+        while this.running == 1 {
+            let mx = gfx.get_mouse_x();
+            let my = gfx.get_mouse_y();
+            let pressed = gfx.is_mouse_pressed();
+            this.handle_events(mx, my, pressed);
+            this.render();
+            time.sleep(8);
+        }
+    }
+}
+
+fn main() {
+    let app = new App();
+    app.init();
+    app.run();
+    process.exit(0);
+}
