@@ -1,6 +1,19 @@
-# OpenYanase Kernel v2
+<p align="center">
+  <img src="banner.png" alt="OpenYanase Kernel v2 Logo" width="160px" height="160px">
+</p>
 
-**OpenYanase Kernel v2** is the next-generation evolution of OpenYanase Kernel v1. Rebuilt and heavily enhanced in Rust, v2 introduces a dual-boot architecture (Legacy BIOS x86 & UEFI x86_64), its own custom compiler toolchain (**YBC Compiler**), and an integrated Runtime/VM environment.
+<h1 align="center">OpenYanase Kernel v2</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/language-Rust-orange.svg?style=flat-square&logo=rust" alt="Language: Rust">
+  <img src="https://img.shields.io/badge/architecture-x86__64%20%7C%20i686-blue.svg?style=flat-square" alt="Architecture">
+  <img src="https://img.shields.io/badge/boot-UEFI%20%2F%20Legacy-green.svg?style=flat-square" alt="Boot Mode">
+  <img src="https://img.shields.io/badge/license-PmgTeam-purple.svg?style=flat-square" alt="License">
+</p>
+
+<p align="center">
+  <b>Next-generation evolution of OpenYanase Kernel featuring dual-boot architecture, custom YBC compiler, and built-in VM runtime.</b>
+</p>
 
 ---
 
@@ -48,7 +61,7 @@ After cloning the repository, manually create the following directories inside `
    * Add `splash.bmp` (Image format: **32bpp**, resolution **800x600** with pre-rendered warning & credits overlay text).
    * Add a PSF font file renamed to **`font.psf`**. You can download a compatible 8x16 PSF font from the [ercanersoy/PSF-Fonts](https://github.com/ercanersoy/PSF-Fonts) repository (e.g., `default8x16.psf`) and rename it to `font.psf`:
      ```bash
-     curl -L -o initrd_root/font.psf [https://raw.githubusercontent.com/ercanersoy/PSF-Fonts/master/default8x16.psf](https://raw.githubusercontent.com/ercanersoy/PSF-Fonts/master/default8x16.psf)
+     curl -L -o initrd_root/font.psf https://raw.githubusercontent.com/ercanersoy/PSF-Fonts/master/default8x16.psf
      ```
 
 ---
