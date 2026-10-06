@@ -9,21 +9,23 @@
   <img src="https://img.shields.io/badge/architecture-x86__64-blue.svg?style=flat-square" alt="Architecture: x86_64">
   <img src="https://img.shields.io/badge/boot-Multiboot2%20%2F%20GRUB-green.svg?style=flat-square" alt="Boot: Multiboot2 / GRUB">
   <img src="https://img.shields.io/badge/kernel-no__std-red.svg?style=flat-square" alt="no_std">
-  <img src="https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square&logo=gnu" alt="License: GPLv3">
+  <img src="https://img.shields.io/badge/compiler-ybcc-yellow.svg?style=flat-square" alt="Compiler: ybcc">
+  <img src="https://img.shields.io/badge/license-GPLv3-3DA639.svg?style=flat-square&logo=gnu" alt="License: GPLv3">
 </p>
 
 <p align="center">
-  <b>A 64-bit monolithic microkernel-style OS written in pure Rust — featuring a Zero Trust capability model, Ring 1 driver isolation, dual VM runtimes (YBC + KVM), and a full graphics stack.</b>
+  <b>A 64-bit monolithic microkernel-style OS written in pure Rust — featuring a Zero Trust capability model, Ring 1 driver isolation, dual VM runtimes (YBC + KVM), a custom Yanase-Lang compiler, and a full graphics stack.</b>
 </p>
 
 ---
 
 ## ✨ Highlights
 
-- 🦀 **100% Rust `#![no_std]`** — no binary blobs, all assembly via `global_asm!`
+- 🦀 **100% Rust `#![no_std]`** kernel — no binary blobs, all assembly via `global_asm!`
 - 🔐 **Zero Trust capability model** — every entity holds a `CapToken` minted by the kernel; tokens cannot be forged or escalated
 - 🛡️ **Ring 1 driver isolation** — drivers run at CPL=1; all I/O port access is routed through `int 0x81` for kernel-side whitelisting
 - 🧠 **Dual VM**: `YbcVm` for apps (stack-based bytecode) + `KernelVm` for drivers (capability-gated)
+- 🧰 **Custom compiler (`ybcc`)** — lexer / parser / AST / resolver / codegen pipeline that compiles Yanase-Lang (`.yl`) into YBC bytecode (`.ybc`) or packed `.abp` packages
 - 🖼️ **Graphics stack**: double-buffered `Surface` with `rep stosd`, ANSI truecolor console, PSF1/PSF2/YFN1 antialiased fonts, BMP decoder, window manager
 - 💥 **Panic overlay on framebuffer** — dumps all GPRs/CRs/stack to screen when running in graphics mode
 - ⚡ **ACPI S5 shutdown** + 5 fallback reset paths (ACPI reset, PCI 0xCF9, PS/2, port 0x92, triple fault)
@@ -90,7 +92,7 @@ Drivers that trip the watchdog **3 times → Faulted → auto-unload**. The IRQ 
 
 ```
 myapp.abp (tar)
-├── manifest.txt   # "entry=main.ybc"
+├── manifest.txt   # "name=MyApp\nentry=main.ybc\nheap=65536\n"
 └── main.ybc       # bytecode
 ```
 
@@ -104,17 +106,176 @@ Autoload scan:
 
 ## 🧠 YBC Bytecode VM
 
-Stack-based VM with the following feature set:
+Stack-based VM implemented in the kernel (`src/ybc_vm.rs`) and mirrored by the compiler's codegen (`tools/ybc_compiler/src/codegen.rs`). Opcode table is identical on both sides.
 
-- **Arithmetic** — Add/Sub/Mul/Div (wrapping; div-by-zero faults)
-- **Comparison** — Lt/Gt/Eq/Not
-- **Control flow** — Jmp/JmpIfFalse with bounds checks
-- **Locals** — LoadLocal/StoreLocal (32 slots)
-- **Calls** — CallMethod/Ret with a 16-frame call stack, per-frame locals
-- **Objects** — NewObject/GetField/SetField (16 fields/object, 32-object pool)
-- **Array/Buffer** — NewArray/GetIndex/SetIndex/ArrayLen (256 elements)
-- **Syscall** — CallSys with whitelisted IDs, argc ≤ 5
+| Opcode | Value | Operand | Description |
+|--------|-------|---------|-------------|
+| `Nop` | 0 | — | No-op |
+| `PushInt` | 1 | `i64` | Push integer literal |
+| `PushStr` | 2 | `u16` | Push interned string (offset into string pool) |
+| `Pop` | 3 | — | Discard top of stack |
+| `Add` / `Sub` / `Mul` / `Div` | 4–7 | — | Arithmetic (wrapping; div-by-zero faults) |
+| `Lt` / `Gt` / `Eq` | 8–10 | — | Comparison → 0/1 |
+| `Not` | 11 | — | Logical NOT |
+| `JmpIfFalse` | 12 | `u32` | Conditional jump (absolute) |
+| `Jmp` | 13 | `u32` | Unconditional jump |
+| `CallSys` | 14 | `u16`, `u8` | syscall ID + argc (≤ 5) |
+| `LoadLocal` / `StoreLocal` | 15–16 | `u8` | 32 local slots |
+| `Dup` | 17 | — | Duplicate top |
+| `Halt` | 18 | — | Terminate VM, top of stack = exit code |
+| `NewObject` | 19 | `u16` | Allocate instance with class ID |
+| `GetField` / `SetField` | 20–21 | `u8` | Field slot (16 max) |
+| `CallMethod` | 22 | `u32`, `u8` | target pc + argc |
+| `Ret` | 23 | — | Return from method |
+| `NewArray` | 24 | — | Pop size, push handle |
+| `GetIndex` / `SetIndex` | 25–26 | — | Array or buffer access |
+| `ArrayLen` | 27 | — | Push length |
+
+Additional runtime limits:
+
+- **256-element** array / buffer max
+- **32-object** pool per VM instance
+- **16-frame** call stack, per-frame **32 locals**
 - **Interned string pool** — 1024 slots + 512-entry direct cache
+
+---
+
+## 🧰 Yanase-Lang & `ybcc` Compiler
+
+`tools/ybc_compiler/` is a full compiler for **Yanase-Lang** (`.yl`), written in pure Rust on the host (not `no_std`). Binary name: **`ybcc`**.
+
+### Compiler Pipeline
+
+```
+.yl source
+   │
+   ├─ lexer.rs      ── tokens  (keywords: class, extends, fn, let, if, else,
+   │                            while, return, import, as, true, false, new,
+   │                            package, break, continue)
+   ├─ parser.rs     ── AST     (recursive descent, precedence:
+   │                            or > and > cmp > add > mul > unary > postfix)
+   ├─ module.rs     ── resolve imports across search roots
+   ├─ resolver.rs   ── merge class inheritance chains, qualify names
+   └─ codegen.rs    ── emit bytecode (matches kernel's ybc_vm.rs opcodes)
+                       │
+                       ├─ .ybc  (raw bytecode, no -pack)
+                       └─ .abp  (tar + manifest.txt + main.ybc, with -pack)
+```
+
+### Language Features
+
+- **Package declaration**: `package my.app;`
+- **Imports with alias**: `import utils.math;` / `import graphics.window as win;`
+- **Single inheritance**: `class Circle extends Shape { ... }`
+- **Methods** (with implicit `this` in slot 0) and **fields**
+- **Statements**: `let`, `if/else` (and `else if` chains), `while`, `break`, `continue`, `return`
+- **Expressions**:
+  - Integer literals (decimal + `0x` hex), string literals (with `\n`)
+  - Array literals `[a, b, c]`, index access `arr[i]`, `arr[i] = v`
+  - Field access `obj.field`, field assign `obj.field = v`
+  - Method calls `obj.method(args)`
+  - Instantiation `new ClassName()`
+  - BinOps: `+ - * / < > <= >= == != && ||`, unary `-`, unary `!`
+- **Raw syscall escape hatch**: `syscall(<id>, args...)`
+- **Short-circuit `&&` / `||`** (compiled via `Dup` + `JmpIfFalse` + `Pop`)
+- **`<=` / `>=`** desugared to `!(a > b)` / `!(a < b)`
+
+### Example (`hello.yl`)
+
+```swift
+package demo.hello;
+
+import utils.math;
+
+class Shape {
+    x;
+    y;
+
+    fn move(dx, dy) {
+        x = x + dx;
+        y = y + dy;
+    }
+}
+
+class Circle extends Shape {
+    radius;
+
+    fn area() {
+        return radius * radius * 3;
+    }
+}
+
+fn main() {
+    let width = 800;
+    let height = 600;
+
+    gfx.init();
+    gfx.clear(0, 0);
+    gfx.fill_rect(0, 0, width, height, 0xFF1E90FF);
+
+    let counter = 0;
+    while (counter < 10) {
+        if (counter == 5) {
+            io.write_line("Halfway completed!");
+        } else {
+            io.write_line("Processing...");
+        }
+        counter = counter + 1;
+    }
+
+    let c = new Circle();
+    c.radius = 32;
+    let area = c.area();
+    io.write_line("Circle area computed");
+
+    gfx.flush();
+    time.sleep_ms(1000);
+
+    return 0;
+}
+```
+
+### Standard Library (excerpt)
+
+All stdlib functions are mapped to kernel syscalls in `tools/ybc_compiler/src/stdlib.rs`.
+
+| Module | Functions |
+|--------|-----------|
+| `io` | `write_line`, `println`, `write_str`, `write`, `write_int`, `write_char`, `read_char`, `read_key`, `wait_key`, `read_line`, `write_port`, `read_port` |
+| `console` | `clear`, `backspace` |
+| `gfx` | `init`, `paint_block`, `clear`, `draw_pixel`, `draw_line`, `draw_rect`, `fill_rect`, `draw_char`, `draw_str`, `draw_text`, `flush`, `get_mouse_x`, `get_mouse_y`, `is_mouse_pressed`, `draw_cursor` |
+| `screen` | `width`, `height`, `flush` |
+| `time` | `now_ticks`, `now_secs`, `sleep_ms`, `sleep` |
+| `proc` / `process` | `pause_for`, `terminate`, `self_id`, `get_pid`, `get_uptime`, `get_memory`, `run`, `exit` |
+| `fs` | `list_dir`, `read_file`, `cd`, `get_cwd`, `is_dir` |
+| `userfs` | `read_file`, `write_file`, `delete_file`, `exists` |
+| `session` | `get`, `set`, `clear` |
+| `ipc` | `create_port`, `send`, `recv` |
+| `system` | `exit`, `pid`, `width`, `height`, `beep`, `exec`, `exec_arr`, `reboot`, `shutdown` |
+| `daemon` | `kill`, `find`, `send`, `recv`, `msg_kind`, `msg_a`, `msg_b`, `msg_c`, `reply`, `self_pid` |
+
+### Compiling
+
+```bash
+cd tools/ybc_compiler
+cargo build --release
+
+# Raw bytecode output
+./target/release/ybcc hello.yl hello.ybc
+
+# Packed .abp package (tar + manifest.txt + main.ybc)
+./target/release/ybcc hello.yl hello.abp -pack --name=Hello
+
+# Extra module search roots
+./target/release/ybcc hello.yl hello.ybc --include=lib,src,stdlib
+```
+
+| Flag | Description |
+|------|-------------|
+| `<entry.yl> <output>` | Entry file and output path |
+| `--include=dir1,dir2` | Extra module search roots (defaults to entry file's directory) |
+| `-pack` | Produce `.abp` instead of raw `.ybc` |
+| `--name=AppName` | App name for `manifest.txt` (only with `-pack`) |
 
 ---
 
@@ -163,29 +324,42 @@ Ring 0 ⇄ Ring 1 trampoline via `iretq`; `IOPL` is cleared to forbid direct `in
 ## 🗂️ Repository Structure
 
 ```
-src/
-├── boot.rs              # Multiboot2 header + 32→64 long mode setup
-├── main.rs              # kmain, heap, VFS mount, main loop, panic handler
-├── idt.rs / gdt.rs      # 256-vector IDT, 9-slot GDT + TSS
-├── cpu.rs               # Port I/O, CR, MSR helpers
-├── console.rs           # ANSI console + scrollback
-├── serial.rs            # COM1
-├── timer.rs             # PIT 1000 Hz
-├── keyboard.rs / mouse.rs  # PS/2 with global_asm stubs
-├── acpi.rs              # RSDP/FADT/DSDT + shutdown/reboot
-├── gop.rs / bmp.rs      # Framebuffer + BMP decoder
-├── graphics/            # Surface, Font (PSF/YFN), Window, Gfx
-├── vfs.rs / initrd.rs / ramfs.rs  # Storage stack
-├── ybc.rs / ybc_vm.rs   # YBC bytecode + VM for apps
-├── kvm.rs / kvm_guard.rs  # Kernel VM for drivers + capability token
-├── ring.rs / ring1_handler.rs / ring1_vm.rs  # Ring 1 trampoline + dispatcher
-├── driver.rs / driver_loader.rs  # Driver manager + autoload
-├── daemon.rs            # Background service + mailbox IPC
-├── abp.rs               # ABP package runner
-├── process.rs           # Process table for apps
-├── session.rs / user.rs # Session UID + user context
-├── shell.rs / init.rs   # Shell built-ins + init.rc runner
-└── log.rs               # Dual serial+TTY logging with prebuffer
+kernel/
+├── src/
+│   ├── boot.rs              # Multiboot2 header + 32→64 long mode setup
+│   ├── main.rs              # kmain, heap, VFS mount, main loop, panic handler
+│   ├── idt.rs / gdt.rs      # 256-vector IDT, 9-slot GDT + TSS
+│   ├── cpu.rs               # Port I/O, CR, MSR helpers
+│   ├── console.rs           # ANSI console + scrollback
+│   ├── serial.rs            # COM1
+│   ├── timer.rs             # PIT 1000 Hz
+│   ├── keyboard.rs / mouse.rs  # PS/2 with global_asm stubs
+│   ├── acpi.rs              # RSDP/FADT/DSDT + shutdown/reboot
+│   ├── gop.rs / bmp.rs      # Framebuffer + BMP decoder
+│   ├── graphics/            # Surface, Font (PSF/YFN), Window, Gfx
+│   ├── vfs.rs / initrd.rs / ramfs.rs  # Storage stack
+│   ├── ybc.rs / ybc_vm.rs   # YBC bytecode + VM for apps
+│   ├── kvm.rs / kvm_guard.rs  # Kernel VM for drivers + capability token
+│   ├── ring.rs / ring1_handler.rs / ring1_vm.rs  # Ring 1 trampoline + dispatcher
+│   ├── driver.rs / driver_loader.rs  # Driver manager + autoload
+│   ├── daemon.rs            # Background service + mailbox IPC
+│   ├── abp.rs               # ABP package runner
+│   ├── process.rs           # Process table for apps
+│   ├── session.rs / user.rs # Session UID + user context
+│   ├── shell.rs / init.rs   # Shell built-ins + init.rc runner
+│   └── log.rs               # Dual serial+TTY logging with prebuffer
+│
+└── tools/ybc_compiler/
+    └── src/
+        ├── main.rs          # CLI entry (`ybcc`), -pack / --name / --include
+        ├── lexer.rs         # Tokenizer
+        ├── ast.rs           # AST types
+        ├── parser.rs        # Recursive descent parser
+        ├── module.rs        # Import resolution
+        ├── resolver.rs      # Class chain merge + name qualification
+        ├── codegen.rs       # Bytecode emitter (matches ybc_vm.rs)
+        ├── stdlib.rs        # Module → syscall ID mapping
+        └── tar_writer.rs    # .abp packaging
 ```
 
 ---
@@ -233,6 +407,14 @@ cargo run
 
 The build script produces `openyanase.iso` and boots it through QEMU.
 
+### Build the Compiler
+
+```bash
+cd tools/ybc_compiler
+cargo build --release
+# binary: target/release/ybcc
+```
+
 ---
 
 ## 🐚 Shell
@@ -265,7 +447,7 @@ Init script `/globalsys/init.rc`:
 # comment
 sleep 500
 echo "Hello from init.rc"
-myapp.abp
+hello.abp
 ```
 
 - Comments start with `#`
@@ -275,77 +457,30 @@ myapp.abp
 
 ---
 
-## 📝 Yanase-Lang (`.yl`) & YBC Compiler
+## 🧩 End-to-End Workflow
 
-> ⚠️ **Note**: This section describes the compiler toolchain. Verify against the current `tools/ybc_compiler/` tree — the runtime VM in `src/ybc_vm.rs` is authoritative for bytecode semantics.
-
-### Syntax Overview (`example.yl`)
-
-```swift
-// Module imports
-import utils.math;
-import graphics.window as win;
-
-// Class declaration (supports single inheritance)
-class Shape {
-    x;
-    y;
-
-    fn move(dx, dy) {
-        x = x + dx;
-        y = y + dy;
-    }
-}
-
-class Circle extends Shape {
-    radius;
-
-    fn area() {
-        return radius * radius * 3;
-    }
-}
-
-// Main entry point
-fn main() {
-    let width = 800;
-    let height = 600;
-
-    let counter = 0;
-    while (counter < 10) {
-        if (counter == 5) {
-            print("Halfway completed!");
-        } else {
-            print("Processing...");
-        }
-        counter = counter + 1;
-    }
-
-    // Built-in kernel syscalls
-    draw_rect(0, 0, width, height);
-    sleep(1000);
-
-    return 0;
-}
 ```
-
-### Built-in Syscalls
-
-- `print(msg)`
-- `draw_rect(x, y, w, h)`
-- `get_tick()`
-- `sleep(ms)`
-- `exit()`
-
-### Compiling `.yl` → `.ybc`
-
-```bash
-cd tools/ybc_compiler
-
-# Basic compilation
-cargo run -- <entry.yl> <output.ybc>
-
-# Compile with extra module search directories
-cargo run -- <entry.yl> <output.ybc> --include=dir1,dir2
+1. Write hello.yl
+       │
+2. tools/ybc_compiler → ybcc hello.yl hello.abp -pack --name=Hello
+       │
+       ├─ lexer    → tokens
+       ├─ parser   → AST
+       ├─ resolver → merge class chains
+       ├─ codegen  → YBC bytecode (magic 0x59424331)
+       └─ tar_writer → .abp { manifest.txt, main.ybc }
+       │
+3. Drop hello.abp into initrd_root/globalsys/apps/
+       │
+4. Rebuild ISO → boot → shell
+       │
+5. > hello
+       │
+       ├─ shell finds .abp in initrd
+       ├─ abp::run_abp_file → extract main.ybc
+       ├─ process::spawn_ybc → copy bytecode into process slot
+       ├─ YbcVm::new → parse header (magic / code_len / string_pool_len)
+       └─ YbcVm::run → interpret opcodes, dispatch syscalls via int 0x80
 ```
 
 ---
